@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -356,6 +357,27 @@ class PdfService {
     );
   }
 
+  static Uint8List? parseSignatureBytes(String? input) {
+    if (input == null || input.trim().isEmpty) return null;
+    String cleanInput = input.trim();
+    if (cleanInput.contains(',')) {
+      cleanInput = cleanInput.split(',').last;
+    }
+    try {
+      final decoded = base64Decode(cleanInput);
+      if (decoded.isNotEmpty) return decoded;
+    } catch (_) {}
+
+    try {
+      final file = File(input);
+      if (file.existsSync()) {
+        return file.readAsBytesSync();
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
   static Future<pw.Document> generateContract(Borrower borrower) async {
     final pdf = pw.Document();
 
@@ -394,17 +416,13 @@ class PdfService {
 
     // Resolve signature image if available
     pw.Widget? signatureWidget;
-    if (borrower.signatureImagePath != null &&
-        borrower.signatureImagePath!.isNotEmpty) {
-      final file = File(borrower.signatureImagePath!);
-      if (await file.exists()) {
-        try {
-          final bytes = await file.readAsBytes();
-          final image = pw.MemoryImage(bytes);
-          signatureWidget = pw.Image(image, height: 40, fit: pw.BoxFit.contain);
-        } catch (e) {
-          debugPrint('Error loading signature image: $e');
-        }
+    final sigBytes = parseSignatureBytes(borrower.signatureImagePath);
+    if (sigBytes != null && sigBytes.isNotEmpty) {
+      try {
+        final image = pw.MemoryImage(sigBytes);
+        signatureWidget = pw.Image(image, height: 45, fit: pw.BoxFit.contain);
+      } catch (e) {
+        debugPrint('Error loading signature image: $e');
       }
     }
 
@@ -424,7 +442,7 @@ class PdfService {
       pw.Page(
         theme: myTheme,
         pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(40),
+        margin: const pw.EdgeInsets.all(32),
         build: (pw.Context context) {
           return pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -437,24 +455,24 @@ class PdfService {
                 orangeColor: orangeThemeColor,
                 greyColor: greyText,
               ),
-              pw.SizedBox(height: 12),
+              pw.SizedBox(height: 10),
               pw.Divider(thickness: 1.5, color: orangeThemeColor),
-              pw.SizedBox(height: 14),
+              pw.SizedBox(height: 12),
 
               // Intro Paragraph
               pw.RichText(
                 text: pw.TextSpan(
-                  style: const pw.TextStyle(color: PdfColors.black, fontSize: 10, lineSpacing: 2.5),
+                  style: const pw.TextStyle(color: PdfColors.black, fontSize: 9.5, lineSpacing: 2),
                   children: [
                     const pw.TextSpan(text: 'This Loan Agreement (the "Agreement") is entered into and made effective as of '),
                     pw.TextSpan(text: borrower.issueDate, style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
                     const pw.TextSpan(text: ', by and between the lender, '),
-                    pw.TextSpan(text: 'ANDA', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                    pw.TextSpan(text: 'Julius Lorenzo Ramboy (ANDA)', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
                     const pw.TextSpan(text: ', and the undersigned borrower, specified under the covenants detailed below.'),
                   ],
                 ),
               ),
-              pw.SizedBox(height: 16),
+              pw.SizedBox(height: 12),
 
               // Terms Table
               _buildEnglishTable(
@@ -471,37 +489,37 @@ class PdfService {
                 orangeColor: orangeThemeColor,
                 greenColor: greenText,
               ),
-              pw.SizedBox(height: 24),
+              pw.SizedBox(height: 14),
 
               // Section 1
               _buildSectionHeader(
                 borrower.isOneTimeInterest
-                    ? '1. PROMISE TO PAY & INTEREST STRUCTURE'
+                    ? '1. PROMISE TO PAY'
                     : '1. PROMISE TO PAY & MONTHLY INTEREST STRUCTURE',
                 orangeThemeColor,
               ),
-              pw.SizedBox(height: 8),
+              pw.SizedBox(height: 6),
               pw.Text(
                 borrower.isOneTimeInterest
-                    ? 'For value received, the Borrower promises to pay to the order of ANDA the principal sum of $formattedAmount. The interest is structured as a one-time agreed amount of $formattedRate.'
-                    : 'For value received, the Borrower promises to pay to the order of ANDA the principal sum of $formattedAmount. The interest rate is structured monthly at a fixed rate of $formattedRate.',
-                style: const pw.TextStyle(fontSize: 10, color: PdfColors.black, lineSpacing: 2),
+                    ? 'The Borrower promises to pay the amount borrowed (principal) of $formattedAmount, together with interest structured as a one-time agreed amount of $formattedRate.'
+                    : 'The Borrower promises to pay the amount borrowed (principal) of $formattedAmount, together with interest structured monthly at a fixed rate of $formattedRate.',
+                style: const pw.TextStyle(fontSize: 9, color: PdfColors.black, lineSpacing: 1.8),
               ),
-              pw.SizedBox(height: 18),
+              pw.SizedBox(height: 12),
 
               // Section 2
               _buildSectionHeader('2. CONDITIONS FOR REPAYMENT & PENALTIES', orangeThemeColor),
-              pw.SizedBox(height: 8),
+              pw.SizedBox(height: 6),
               pw.Text(
                 borrower.isOneTimeInterest
                     ? 'If the Borrower fails to fully pay the outstanding balance on or before the specified Repayment Date, a penalty interest may apply as agreed upon by both parties.'
                     : 'If the Borrower fails to fully pay the outstanding balance on or before the specified Repayment Date, a running monthly interest charge will automatically apply to the remaining balance.',
-                style: const pw.TextStyle(fontSize: 10, color: PdfColors.black, lineSpacing: 2),
+                style: const pw.TextStyle(fontSize: 9, color: PdfColors.black, lineSpacing: 1.8),
               ),
-              pw.SizedBox(height: 10),
+              pw.SizedBox(height: 6),
               pw.RichText(
                 text: pw.TextSpan(
-                  style: const pw.TextStyle(color: PdfColors.black, fontSize: 10, lineSpacing: 2.5),
+                  style: const pw.TextStyle(color: PdfColors.black, fontSize: 9, lineSpacing: 2),
                   children: [
                     pw.TextSpan(text: 'Exemption Clause: ', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
                     const pw.TextSpan(text: 'If the Borrower successfully makes a partial payment/reduction on their debt based on the '),
@@ -517,6 +535,20 @@ class PdfService {
                     const pw.TextSpan(text: ' will be charged or incurred for that specific period.'),
                   ],
                 ),
+              ),
+              pw.SizedBox(height: 12),
+
+              // Section 3
+              _buildSectionHeader('3. INTEREST RECALCULATION ON PRINCIPAL REDUCTION', orangeThemeColor),
+              pw.SizedBox(height: 6),
+              pw.Text(
+                'Interest is always computed as a percentage of the current outstanding principal, not the original loan amount. When a borrower makes a payment that reduces the principal, the interest due for the next billing cycle is recalculated based on the new (reduced) principal balance.',
+                style: const pw.TextStyle(fontSize: 9, color: PdfColors.black, lineSpacing: 1.8),
+              ),
+              pw.SizedBox(height: 4),
+              pw.Text(
+                'Example: Principal = Php 20,000 at 10% interest/month -> interest due = Php 2,000/month.\nOn the due date, borrower pays Php 2,000 (principal) + Php 2,000 (interest) = Php 4,000 total.\nNew principal balance = Php 18,000.\nNext month\'s interest = 10% of Php 18,000 = Php 1,800 (not Php 2,000).',
+                style: pw.TextStyle(fontSize: 8, color: PdfColor.fromHex('#4B5563'), fontStyle: pw.FontStyle.italic, lineSpacing: 1.6),
               ),
               pw.Spacer(),
 
@@ -538,7 +570,7 @@ class PdfService {
       pw.Page(
         theme: myTheme,
         pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(40),
+        margin: const pw.EdgeInsets.all(32),
         build: (pw.Context context) {
           return pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -551,24 +583,24 @@ class PdfService {
                 orangeColor: orangeThemeColor,
                 greyColor: greyText,
               ),
-              pw.SizedBox(height: 12),
+              pw.SizedBox(height: 10),
               pw.Divider(thickness: 1.5, color: orangeThemeColor),
-              pw.SizedBox(height: 14),
+              pw.SizedBox(height: 12),
 
               // Intro Paragraph Tagalog
               pw.RichText(
                 text: pw.TextSpan(
-                  style: const pw.TextStyle(color: PdfColors.black, fontSize: 10, lineSpacing: 2.5),
+                  style: const pw.TextStyle(color: PdfColors.black, fontSize: 9.5, lineSpacing: 2),
                   children: [
                     const pw.TextSpan(text: 'Ang Kasunduang ito ay ginawa at ipinatutupad ngayong '),
                     pw.TextSpan(text: tagalogIssueDate, style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-                    const pw.TextSpan(text: ', sa pagitan ng nagpapautang na '),
-                    pw.TextSpan(text: 'ANDA', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                    const pw.TextSpan(text: ', sa pagitan ng nagpapautang na si '),
+                    pw.TextSpan(text: 'Julius Lorenzo Ramboy (ANDA)', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
                     const pw.TextSpan(text: ', at ng hiram na nakalagda sa ibaba, alinsunod sa mga tuntuning nakasaad dito.'),
                   ],
                 ),
               ),
-              pw.SizedBox(height: 16),
+              pw.SizedBox(height: 12),
 
               // Terms Table Tagalog
               _buildTagalogTable(
@@ -585,7 +617,7 @@ class PdfService {
                 orangeColor: orangeThemeColor,
                 greenColor: greenText,
               ),
-              pw.SizedBox(height: 24),
+              pw.SizedBox(height: 14),
 
               // Section 1
               _buildSectionHeader(
@@ -594,28 +626,28 @@ class PdfService {
                     : '1. PANGAKONG MAGBAYAD AT BUWANANG INTERES',
                 orangeThemeColor,
               ),
-              pw.SizedBox(height: 8),
+              pw.SizedBox(height: 6),
               pw.Text(
                 borrower.isOneTimeInterest
-                    ? 'Ang Nagkakautang ay nangangakong magbayad sa ANDA ng pangunahing halagang $formattedAmount. Ang interes ng pautang na ito ay nakatakda sa isang beses na napagkasunduang halaga na $formattedRate.'
-                    : 'Ang Nagkakautang ay nangangakong magbayad sa ANDA ng pangunahing halagang $formattedAmount. Ang interes ng pautang na ito ay nakatakda sa $formattedRate kada buwan (monthly interest).',
-                style: const pw.TextStyle(fontSize: 10, color: PdfColors.black, lineSpacing: 2),
+                    ? 'Ang Humiram ay nangangakong magbayad ng inutang na halaga (principal) na $formattedAmount, kasama ang interes na nakatakda sa na napagkasunduang halaga na $formattedRate.'
+                    : 'Ang Humiram ay nangangakong magbayad ng inutang na halaga (principal) na $formattedAmount, kasama ang interes na nakatakda sa $formattedRate kada buwan (monthly interest).',
+                style: const pw.TextStyle(fontSize: 9, color: PdfColors.black, lineSpacing: 1.8),
               ),
-              pw.SizedBox(height: 18),
+              pw.SizedBox(height: 12),
 
               // Section 2
               _buildSectionHeader('2. PATAKARAN SA KABAYARAN AT KONDISYON SA INTERES', orangeThemeColor),
-              pw.SizedBox(height: 8),
+              pw.SizedBox(height: 6),
               pw.Text(
                 borrower.isOneTimeInterest
-                    ? 'Kapag ang Nagkakautang ay hindi nakapagbayad sa takdang Petsa ng Kabayaran (Repayment Date), kaukulang multa o karagdagang interes ang ipapataw ayon sa napagkasunduan ng dalawang panig.'
+                    ? 'Kapag ang Nagkakautang ay hindi nakapagbayad sa takdang Petsa ng Kabayaran (Repayment Date), kaukulang multa o karagdagang interes ay ipapataw ayon sa napagkasunduan.'
                     : 'Kapag ang Nagkakautang ay hindi nakapagbayad sa takdang Petsa ng Kabayaran (Repayment Date), sila ay magbabayad ng kaukulang buwanang interes na ipapataw sa natitirang utang.',
-                style: const pw.TextStyle(fontSize: 10, color: PdfColors.black, lineSpacing: 2),
+                style: const pw.TextStyle(fontSize: 9, color: PdfColors.black, lineSpacing: 1.8),
               ),
-              pw.SizedBox(height: 10),
+              pw.SizedBox(height: 6),
               pw.RichText(
                 text: pw.TextSpan(
-                  style: const pw.TextStyle(color: PdfColors.black, fontSize: 10, lineSpacing: 2.5),
+                  style: const pw.TextStyle(color: PdfColors.black, fontSize: 9, lineSpacing: 2),
                   children: [
                     pw.TextSpan(text: 'Kondisyon sa Pagkakaltas (Exemption): ', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
                     const pw.TextSpan(text: 'Kung ang Nagkakautang ay nakapagbawas o nakapagbayad ng kaukulang halaga alinsunod sa '),
@@ -631,6 +663,20 @@ class PdfService {
                     const pw.TextSpan(text: ' para sa naturang buwan o panahon.'),
                   ],
                 ),
+              ),
+              pw.SizedBox(height: 12),
+
+              // Section 3 Tagalog
+              _buildSectionHeader('3. REKULKULASYON NG INTERES SA PAGBAWAS NG PRINSIPAL', orangeThemeColor),
+              pw.SizedBox(height: 6),
+              pw.Text(
+                'Ang interes ay palaging kinukwenta batay sa kasalukuyang natitirang utang (principal), at hindi sa orihinal na halaga ng inutang. Kapag ang humiram ay nagbayad ng halagang nakapagbawas sa principal, ang interes para sa susunod na buwan ay muling kukwentahin batay sa bago at nabawasang principal balance.',
+                style: const pw.TextStyle(fontSize: 9, color: PdfColors.black, lineSpacing: 1.8),
+              ),
+              pw.SizedBox(height: 4),
+              pw.Text(
+                'Halimbawa: Principal = Php 20,000 sa 10% interes/buwan -> interes = Php 2,000/buwan.\nSa takdang petsa, ang humiram ay nagbayad ng Php 2,000 (principal) + Php 2,000 (interes) = Php 4,000 kabuuan.\nAng bagong principal balance = Php 18,000.\nAng interes sa susunod na buwan = 10% ng Php 18,000 = Php 1,800 (hindi na Php 2,000).',
+                style: pw.TextStyle(fontSize: 8, color: PdfColor.fromHex('#4B5563'), fontStyle: pw.FontStyle.italic, lineSpacing: 1.6),
               ),
               pw.Spacer(),
 

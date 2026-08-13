@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'dart:io';
 import '../database/database_helper.dart';
 import '../models/borrower.dart';
+import '../services/pdf_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
 
@@ -153,8 +155,66 @@ class _AddLoanScreenState extends State<AddLoanScreen> {
 
   Future<void> _pickSignature() async {
     final picker = ImagePicker();
-    final img = await picker.pickImage(source: ImageSource.gallery);
-    if (img != null) setState(() => signaturePath = img.path);
+    final source = await showModalBottomSheet<ImageSource?>(
+      context: context,
+      backgroundColor: AppTheme.cream,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Select Signature Source',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: AppTheme.navy,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined, color: AppTheme.navy),
+                title: const Text('Choose from Gallery'),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+              ListTile(
+                leading: const Icon(Icons.camera_alt_outlined, color: AppTheme.navy),
+                title: const Text('Take Photo with Camera'),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              if (signaturePath != null && signaturePath!.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.delete_outline, color: AppTheme.red),
+                  title: const Text('Remove Signature', style: TextStyle(color: AppTheme.red)),
+                  onTap: () {
+                    Navigator.pop(ctx, null);
+                    setState(() => signaturePath = null);
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (source == null) return;
+
+    final img = await picker.pickImage(
+      source: source,
+      maxWidth: 800,
+      maxHeight: 400,
+      imageQuality: 85,
+    );
+
+    if (img != null) {
+      final bytes = await img.readAsBytes();
+      final base64Str = base64Encode(bytes);
+      setState(() => signaturePath = base64Str);
+    }
   }
 
   Future<void> _save() async {
@@ -489,49 +549,53 @@ class _AddLoanScreenState extends State<AddLoanScreen> {
                               color: AppTheme.textGrey,
                               letterSpacing: 0.5)),
                       const SizedBox(height: 8),
-                      GestureDetector(
-                        onTap: _pickSignature,
-                        child: Container(
-                          width: double.infinity,
-                          height: 140,
-                          decoration: BoxDecoration(
-                            color: AppTheme.white,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                              color: AppTheme.lightGrey,
-                              style: BorderStyle.solid,
+                      Builder(builder: (context) {
+                        final sigBytes = PdfService.parseSignatureBytes(signaturePath);
+                        return GestureDetector(
+                          onTap: _pickSignature,
+                          onLongPress: _pickSignature,
+                          child: Container(
+                            width: double.infinity,
+                            height: 140,
+                            decoration: BoxDecoration(
+                              color: AppTheme.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: AppTheme.lightGrey,
+                                style: BorderStyle.solid,
+                              ),
                             ),
-                          ),
-                          child: signaturePath != null
-                              ? ClipRRect(
-                                  borderRadius: BorderRadius.circular(16),
-                                  child: Image.file(
-                                    File(signaturePath!),
-                                    fit: BoxFit.contain,
-                                  ),
-                                )
-                              : const Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(Icons.edit_outlined,
-                                        color: AppTheme.navy, size: 32),
-                                    SizedBox(height: 8),
-                                    Text(
-                                      'Upload picture of signature',
-                                      style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 13,
-                                          color: AppTheme.textDark),
+                            child: sigBytes != null && sigBytes.isNotEmpty
+                                ? ClipRRect(
+                                    borderRadius: BorderRadius.circular(16),
+                                    child: Image.memory(
+                                      sigBytes,
+                                      fit: BoxFit.contain,
                                     ),
-                                    SizedBox(height: 4),
-                                    Text('PNG, JPG UP TO 5MB',
+                                  )
+                                : const Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.edit_outlined,
+                                          color: AppTheme.navy, size: 32),
+                                      SizedBox(height: 8),
+                                      Text(
+                                        'Upload picture of signature',
                                         style: TextStyle(
-                                            fontSize: 11,
-                                            color: AppTheme.textGrey)),
-                                  ],
-                                ),
-                        ),
-                      ),
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 13,
+                                            color: AppTheme.textDark),
+                                      ),
+                                      SizedBox(height: 4),
+                                      Text('Tap or Long Press to upload',
+                                          style: TextStyle(
+                                              fontSize: 11,
+                                              color: AppTheme.textGrey)),
+                                    ],
+                                  ),
+                          ),
+                        );
+                      }),
                       const SizedBox(height: 28),
 
                       // ── Submit ──

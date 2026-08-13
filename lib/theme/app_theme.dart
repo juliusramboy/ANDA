@@ -13,6 +13,7 @@ class AppTheme {
   static const Color blue = Color(0xFF3498DB);
   static const Color textDark = Color(0xFF1A1A2E);
   static const Color textGrey = Color(0xFF888888);
+  static const Color orange = Color(0xFFE67E22);
 
   static ThemeData get theme => ThemeData(
         scaffoldBackgroundColor: cream,

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import '../database/database_helper.dart';
 import '../models/borrower.dart';
@@ -69,6 +70,94 @@ class _BorrowerDetailScreenState extends State<BorrowerDetailScreen> {
       remainingInterest = remInterest;
       loading = false;
     });
+  }
+
+  Future<void> _updateSignature() async {
+    if (borrower == null) return;
+    final picker = ImagePicker();
+    final hasSig = borrower!.signatureImagePath != null &&
+        borrower!.signatureImagePath!.isNotEmpty;
+
+    final source = await showModalBottomSheet<ImageSource?>(
+      context: context,
+      backgroundColor: AppTheme.cream,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                hasSig ? 'Update Signature' : 'Add Signature',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                  color: AppTheme.navy,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined, color: AppTheme.navy),
+                title: const Text('Choose from Gallery'),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+              ListTile(
+                leading: const Icon(Icons.camera_alt_outlined, color: AppTheme.navy),
+                title: const Text('Take Photo with Camera'),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              if (hasSig)
+                ListTile(
+                  leading: const Icon(Icons.delete_outline, color: AppTheme.red),
+                  title: const Text('Remove Signature', style: TextStyle(color: AppTheme.red)),
+                  onTap: () async {
+                    Navigator.pop(ctx, null);
+                    final updated = borrower!.copyWith(signatureImagePath: '');
+                    await db.updateBorrower(updated);
+                    _load();
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Signature removed successfully'),
+                          backgroundColor: AppTheme.navy,
+                        ),
+                      );
+                    }
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (source == null) return;
+
+    final img = await picker.pickImage(
+      source: source,
+      maxWidth: 800,
+      maxHeight: 400,
+      imageQuality: 85,
+    );
+
+    if (img != null) {
+      final bytes = await img.readAsBytes();
+      final base64Str = base64Encode(bytes);
+      final updated = borrower!.copyWith(signatureImagePath: base64Str);
+      await db.updateBorrower(updated);
+      _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Signature updated successfully!'),
+            backgroundColor: AppTheme.green,
+          ),
+        );
+      }
+    }
   }
 
   void _showRecordPayment() async {
@@ -554,44 +643,65 @@ class _BorrowerDetailScreenState extends State<BorrowerDetailScreen> {
                     const SectionHeader(title: 'MEMBERSHIP CONTRACT'),
                     const SizedBox(height: 12),
 
-                    Container(
-                      decoration: BoxDecoration(
-                        color: AppTheme.white,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Material(
-                        color: Colors.transparent,
-                        child: ListTile(
-                          onTap: () =>
-                              PdfService.viewContract(context, borrower!),
-                          leading: const Icon(Icons.description_outlined,
-                              color: AppTheme.navy),
-                          title: Text(
-                            '${borrower!.fullName.replaceAll(' ', '_')}_Contract.pdf',
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 13),
-                          ),
-                          subtitle: Text(
-                            'Signed ${borrower!.issueDate}',
-                            style: const TextStyle(
-                                fontSize: 11, color: AppTheme.textGrey),
-                          ),
-                          trailing: GestureDetector(
+                    Builder(builder: (context) {
+                      final hasSig = borrower!.signatureImagePath != null &&
+                          borrower!.signatureImagePath!.trim().isNotEmpty;
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: AppTheme.white,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: ListTile(
                             onTap: () =>
-                                PdfService.downloadContract(context, borrower!),
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: const BoxDecoration(
-                                color: AppTheme.yellow,
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.download,
-                                  size: 16, color: AppTheme.navy),
+                                PdfService.viewContract(context, borrower!),
+                            onLongPress: _updateSignature,
+                            leading: const Icon(Icons.description_outlined,
+                                color: AppTheme.navy),
+                            title: Text(
+                              '${borrower!.fullName.replaceAll(' ', '_')}_Contract.pdf',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                            subtitle: Text(
+                              hasSig
+                                  ? 'Signed ${borrower!.issueDate} (Hold to edit signature)'
+                                  : 'No signature attached (Hold to add signature)',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: hasSig
+                                      ? AppTheme.textGrey
+                                      : AppTheme.orange),
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.edit_outlined,
+                                      size: 20, color: AppTheme.navy),
+                                  tooltip: 'Edit Signature',
+                                  onPressed: _updateSignature,
+                                ),
+                                GestureDetector(
+                                  onTap: () => PdfService.downloadContract(
+                                      context, borrower!),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: const BoxDecoration(
+                                      color: AppTheme.yellow,
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(Icons.download,
+                                        size: 16, color: AppTheme.navy),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),
-                      ),
-                    ),
+                      );
+                    }),
 
                     const SizedBox(height: 28),
 
