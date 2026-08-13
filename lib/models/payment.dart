@@ -6,6 +6,7 @@ class Payment {
   final String paymentDate;
   final String? notes;
   final String status; // 'paid', 'credited'
+  final String updatedAt;
 
   Payment({
     this.id,
@@ -15,7 +16,8 @@ class Payment {
     required this.paymentDate,
     this.notes,
     this.status = 'paid',
-  });
+    String? updatedAt,
+  }) : updatedAt = updatedAt ?? DateTime.now().toUtc().toIso8601String();
 
   Map<String, dynamic> toMap() => {
         'id': id,
@@ -25,16 +27,18 @@ class Payment {
         'paymentDate': paymentDate,
         'notes': notes,
         'status': status,
+        'updatedAt': updatedAt,
       };
 
   factory Payment.fromMap(Map<String, dynamic> map) => Payment(
         id: map['id'],
         borrowerId: map['borrowerId'],
-        amount: map['amount'],
+        amount: (map['amount'] as num).toDouble(),
         paymentType: map['paymentType'],
         paymentDate: map['paymentDate'],
         notes: map['notes'],
         status: map['status'] ?? 'paid',
+        updatedAt: map['updatedAt'],
       );
 
   Payment copyWith({
@@ -45,6 +49,7 @@ class Payment {
     String? paymentDate,
     String? notes,
     String? status,
+    String? updatedAt,
   }) =>
       Payment(
         id: id ?? this.id,
@@ -54,5 +59,6 @@ class Payment {
         paymentDate: paymentDate ?? this.paymentDate,
         notes: notes ?? this.notes,
         status: status ?? this.status,
+        updatedAt: updatedAt ?? this.updatedAt,
       );
 }

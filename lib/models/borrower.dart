@@ -20,6 +20,7 @@ class Borrower {
   final bool isOneTimeInterest;
   final String? waivedPenaltyDates;
   final String? customPenaltyAmounts;
+  final String updatedAt;
 
   Borrower({
     this.id,
@@ -37,7 +38,8 @@ class Borrower {
     this.isOneTimeInterest = false,
     this.waivedPenaltyDates,
     this.customPenaltyAmounts,
-  });
+    String? updatedAt,
+  }) : updatedAt = updatedAt ?? DateTime.now().toUtc().toIso8601String();
 
   Map<String, dynamic> toMap() => {
         'id': id,
@@ -55,14 +57,15 @@ class Borrower {
         'isOneTimeInterest': isOneTimeInterest ? 1 : 0,
         'waivedPenaltyDates': waivedPenaltyDates,
         'customPenaltyAmounts': customPenaltyAmounts,
+        'updatedAt': updatedAt,
       };
 
   factory Borrower.fromMap(Map<String, dynamic> map) => Borrower(
         id: map['id'],
         loanReference: map['loanReference'],
         fullName: map['fullName'],
-        amountBorrowed: map['amountBorrowed'],
-        interestRate: map['interestRate'],
+        amountBorrowed: (map['amountBorrowed'] as num).toDouble(),
+        interestRate: (map['interestRate'] as num).toDouble(),
         repaymentDate: map['repaymentDate'],
         issueDate: map['issueDate'],
         signatureImagePath: map['signatureImagePath'],
@@ -75,6 +78,7 @@ class Borrower {
         isOneTimeInterest: (map['isOneTimeInterest'] ?? 0) == 1,
         waivedPenaltyDates: map['waivedPenaltyDates'],
         customPenaltyAmounts: map['customPenaltyAmounts'],
+        updatedAt: map['updatedAt'],
       );
 
   Borrower copyWith({
@@ -93,6 +97,7 @@ class Borrower {
     bool? isOneTimeInterest,
     String? waivedPenaltyDates,
     String? customPenaltyAmounts,
+    String? updatedAt,
   }) =>
       Borrower(
         id: id ?? this.id,
@@ -110,6 +115,7 @@ class Borrower {
         isOneTimeInterest: isOneTimeInterest ?? this.isOneTimeInterest,
         waivedPenaltyDates: waivedPenaltyDates ?? this.waivedPenaltyDates,
         customPenaltyAmounts: customPenaltyAmounts ?? this.customPenaltyAmounts,
+        updatedAt: updatedAt ?? this.updatedAt,
       );
 
   Map<String, double> getCustomPenaltyMap() {

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'theme/app_theme.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/borrowers_screen.dart';
@@ -11,7 +12,18 @@ import 'screens/onboarding_screen.dart';
 import 'widgets/common_widgets.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Start rendering the app immediately to eliminate startup delay / air time
   runApp(const VaultApp());
+
+  // Initialize Supabase in the background
+  Supabase.initialize(
+    url: 'https://hwjpjbgqmjkhbvpfjbhp.supabase.co',
+    anonKey: 'sb_publishable_HZlpzHPbF0PwxXcpf0KOZw_64lfxHsK',
+  ).catchError((e) {
+    debugPrint('Supabase background initialization error: $e');
+  });
 }
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();

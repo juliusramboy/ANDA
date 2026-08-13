@@ -5,6 +5,7 @@ class SavedStop {
   final double latitude;
   final double longitude;
   final int positionOrder;
+  final String updatedAt;
 
   SavedStop({
     this.id,
@@ -13,7 +14,8 @@ class SavedStop {
     required this.latitude,
     required this.longitude,
     required this.positionOrder,
-  });
+    String? updatedAt,
+  }) : updatedAt = updatedAt ?? DateTime.now().toUtc().toIso8601String();
 
   Map<String, dynamic> toMap() => {
         'id': id,
@@ -22,6 +24,7 @@ class SavedStop {
         'latitude': latitude,
         'longitude': longitude,
         'positionOrder': positionOrder,
+        'updatedAt': updatedAt,
       };
 
   factory SavedStop.fromMap(Map<String, dynamic> map) => SavedStop(
@@ -31,6 +34,7 @@ class SavedStop {
         latitude: map['latitude']?.toDouble() ?? 0.0,
         longitude: map['longitude']?.toDouble() ?? 0.0,
         positionOrder: map['positionOrder'] ?? 0,
+        updatedAt: map['updatedAt'],
       );
 
   SavedStop copyWith({
@@ -40,6 +44,7 @@ class SavedStop {
     double? latitude,
     double? longitude,
     int? positionOrder,
+    String? updatedAt,
   }) =>
       SavedStop(
         id: id ?? this.id,
@@ -48,5 +53,6 @@ class SavedStop {
         latitude: latitude ?? this.latitude,
         longitude: longitude ?? this.longitude,
         positionOrder: positionOrder ?? this.positionOrder,
+        updatedAt: updatedAt ?? this.updatedAt,
       );
 }

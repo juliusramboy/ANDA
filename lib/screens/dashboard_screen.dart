@@ -10,6 +10,7 @@ import '../widgets/common_widgets.dart';
 import '../services/notification_service.dart';
 import 'expenses_screen.dart';
 import 'map_screen.dart';
+import 'profile_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   final VoidCallback? onNavigateToBorrowers;
@@ -250,6 +251,11 @@ class DashboardScreenState extends State<DashboardScreen> {
                                   context,
                                   MaterialPageRoute(builder: (_) => const MapScreen()),
                                 );
+                              } else if (value == 'profile') {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                                ).then((_) => _load());
                               }
                             },
                             itemBuilder: (context) => [
@@ -270,6 +276,16 @@ class DashboardScreenState extends State<DashboardScreen> {
                                     Icon(Icons.map_outlined, color: AppTheme.navy, size: 20),
                                     SizedBox(width: 8),
                                     Text('Map Route', style: TextStyle(color: AppTheme.textDark, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'profile',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.person_outline, color: AppTheme.navy, size: 20),
+                                    SizedBox(width: 8),
+                                    Text('Profile', style: TextStyle(color: AppTheme.textDark, fontWeight: FontWeight.bold)),
                                   ],
                                 ),
                               ),

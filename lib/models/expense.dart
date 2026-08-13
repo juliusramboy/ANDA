@@ -8,6 +8,7 @@ class Expense {
   final String type; // 'expense' or 'income'
   final String status; // 'completed' or 'pending'
   final bool isUrgent;
+  final String updatedAt;
 
   Expense({
     this.id,
@@ -19,7 +20,8 @@ class Expense {
     this.type = 'expense',
     this.status = 'completed',
     this.isUrgent = false,
-  });
+    String? updatedAt,
+  }) : updatedAt = updatedAt ?? DateTime.now().toUtc().toIso8601String();
 
   Map<String, dynamic> toMap() => {
         'id': id,
@@ -31,6 +33,7 @@ class Expense {
         'type': type,
         'status': status,
         'isUrgent': isUrgent ? 1 : 0,
+        'updatedAt': updatedAt,
       };
 
   factory Expense.fromMap(Map<String, dynamic> map) => Expense(
@@ -43,6 +46,7 @@ class Expense {
         type: map['type'] ?? 'expense',
         status: map['status'] ?? 'completed',
         isUrgent: (map['isUrgent'] ?? 0) == 1,
+        updatedAt: map['updatedAt'],
       );
 
   Expense copyWith({
@@ -55,6 +59,7 @@ class Expense {
     String? type,
     String? status,
     bool? isUrgent,
+    String? updatedAt,
   }) =>
       Expense(
         id: id ?? this.id,
@@ -66,5 +71,6 @@ class Expense {
         type: type ?? this.type,
         status: status ?? this.status,
         isUrgent: isUrgent ?? this.isUrgent,
+        updatedAt: updatedAt ?? this.updatedAt,
       );
 }

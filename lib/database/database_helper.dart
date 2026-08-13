@@ -3,16 +3,33 @@ import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/borrower.dart';
 import '../models/payment.dart';
 import '../models/expense.dart';
 import '../models/saved_stop.dart';
+import '../services/supabase_sync_service.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
 
   DatabaseHelper._init();
+
+  void _triggerBackgroundSync() {
+    Future.microtask(() async {
+      try {
+        if (SupabaseSyncService.instance.isLoggedIn) {
+          final settings = await SupabaseSyncService.instance.loadProfileSettings();
+          if (settings['syncEnabled'] == true) {
+            await SupabaseSyncService.instance.syncAll();
+          }
+        }
+      } catch (e) {
+        debugPrint('Auto background sync failed: $e');
+      }
+    });
+  }
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -25,7 +42,7 @@ class DatabaseHelper {
     final path = join(dbPath, fileName);
     return await openDatabase(
       path,
-      version: 9,
+      version: 10,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -48,7 +65,8 @@ class DatabaseHelper {
         dismissedWiggleDate TEXT,
         isOneTimeInterest INTEGER NOT NULL DEFAULT 0,
         waivedPenaltyDates TEXT,
-        customPenaltyAmounts TEXT
+        customPenaltyAmounts TEXT,
+        updatedAt TEXT NOT NULL DEFAULT ''
       )
     ''');
 
@@ -61,6 +79,7 @@ class DatabaseHelper {
         paymentDate TEXT NOT NULL,
         notes TEXT,
         status TEXT NOT NULL DEFAULT 'paid',
+        updatedAt TEXT NOT NULL DEFAULT '',
         FOREIGN KEY (borrowerId) REFERENCES borrowers (id) ON DELETE CASCADE
       )
     ''');
@@ -75,7 +94,8 @@ class DatabaseHelper {
         notes TEXT,
         type TEXT NOT NULL DEFAULT 'expense',
         status TEXT NOT NULL DEFAULT 'completed',
-        isUrgent INTEGER NOT NULL DEFAULT 0
+        isUrgent INTEGER NOT NULL DEFAULT 0,
+        updatedAt TEXT NOT NULL DEFAULT ''
       )
     ''');
 
@@ -86,7 +106,8 @@ class DatabaseHelper {
         address TEXT,
         latitude REAL NOT NULL,
         longitude REAL NOT NULL,
-        positionOrder INTEGER NOT NULL DEFAULT 0
+        positionOrder INTEGER NOT NULL DEFAULT 0,
+        updatedAt TEXT NOT NULL DEFAULT ''
       )
     ''');
   }
@@ -170,14 +191,27 @@ class DatabaseHelper {
         debugPrint('Database upgrade warning version 9: $e');
       }
     }
+    if (oldVersion < 10) {
+      try {
+        await db.execute("ALTER TABLE borrowers ADD COLUMN updatedAt TEXT DEFAULT ''");
+        await db.execute("ALTER TABLE payments ADD COLUMN updatedAt TEXT DEFAULT ''");
+        await db.execute("ALTER TABLE expenses ADD COLUMN updatedAt TEXT DEFAULT ''");
+        await db.execute("ALTER TABLE saved_stops ADD COLUMN updatedAt TEXT DEFAULT ''");
+      } catch (e) {
+        debugPrint('Database upgrade warning version 10: $e');
+      }
+    }
   }
 
   // ─── BORROWER CRUD ───────────────────────────────────────────
 
   Future<int> insertBorrower(Borrower borrower) async {
     final db = await database;
-    return await db.insert('borrowers', borrower.toMap(),
+    final updated = borrower.copyWith(updatedAt: DateTime.now().toUtc().toIso8601String());
+    final result = await db.insert('borrowers', updated.toMap(),
         conflictAlgorithm: ConflictAlgorithm.replace);
+    _triggerBackgroundSync();
+    return result;
   }
 
   Future<List<Borrower>> getAllBorrowers() async {
@@ -196,14 +230,30 @@ class DatabaseHelper {
 
   Future<int> updateBorrower(Borrower borrower) async {
     final db = await database;
-    return await db.update('borrowers', borrower.toMap(),
+    final updated = borrower.copyWith(updatedAt: DateTime.now().toUtc().toIso8601String());
+    final result = await db.update('borrowers', updated.toMap(),
         where: 'id = ?', whereArgs: [borrower.id]);
+    _triggerBackgroundSync();
+    return result;
   }
 
   Future<int> deleteBorrower(int id) async {
     final db = await database;
-    return await db
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user != null) {
+        Supabase.instance.client
+            .from('borrowers')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('id', id)
+            .then((_) {}, onError: (e) => debugPrint('Supabase delete error: $e'));
+      }
+    } catch (_) {}
+    final result = await db
         .delete('borrowers', where: 'id = ?', whereArgs: [id]);
+    _triggerBackgroundSync();
+    return result;
   }
 
   Future<int> getTotalBorrowers() async {
@@ -249,10 +299,18 @@ class DatabaseHelper {
 
   Future<int> insertPayment(Payment payment) async {
     final db = await database;
-    final id = await db.insert('payments', payment.toMap(),
+    final updated = payment.copyWith(updatedAt: DateTime.now().toUtc().toIso8601String());
+    final id = await db.insert('payments', updated.toMap(),
         conflictAlgorithm: ConflictAlgorithm.replace);
     await updateBorrowerStatusIfNeeded(payment.borrowerId);
+    _triggerBackgroundSync();
     return id;
+  }
+
+  Future<List<Payment>> getAllPayments() async {
+    final db = await database;
+    final maps = await db.query('payments', orderBy: 'id DESC');
+    return maps.map((m) => Payment.fromMap(m)).toList();
   }
 
   Future<List<Payment>> getPaymentsByBorrower(int borrowerId) async {
@@ -282,9 +340,11 @@ class DatabaseHelper {
 
   Future<int> updatePayment(Payment payment) async {
     final db = await database;
-    final res = await db.update('payments', payment.toMap(),
+    final updated = payment.copyWith(updatedAt: DateTime.now().toUtc().toIso8601String());
+    final res = await db.update('payments', updated.toMap(),
         where: 'id = ?', whereArgs: [payment.id]);
     await updateBorrowerStatusIfNeeded(payment.borrowerId);
+    _triggerBackgroundSync();
     return res;
   }
 
@@ -293,8 +353,20 @@ class DatabaseHelper {
     final maps = await db.query('payments', where: 'id = ?', whereArgs: [id]);
     if (maps.isNotEmpty) {
       final payment = Payment.fromMap(maps.first);
+      try {
+        final user = Supabase.instance.client.auth.currentUser;
+        if (user != null) {
+          Supabase.instance.client
+              .from('payments')
+              .delete()
+              .eq('user_id', user.id)
+              .eq('id', id)
+              .then((_) {}, onError: (e) => debugPrint('Supabase delete error: $e'));
+        }
+      } catch (_) {}
       final res = await db.delete('payments', where: 'id = ?', whereArgs: [id]);
       await updateBorrowerStatusIfNeeded(payment.borrowerId);
+      _triggerBackgroundSync();
       return res;
     }
     return 0;
@@ -511,14 +583,20 @@ class DatabaseHelper {
 
   Future<int> insertExpense(Expense expense) async {
     final db = await database;
-    return await db.insert('expenses', expense.toMap(),
+    final updated = expense.copyWith(updatedAt: DateTime.now().toUtc().toIso8601String());
+    final result = await db.insert('expenses', updated.toMap(),
         conflictAlgorithm: ConflictAlgorithm.replace);
+    _triggerBackgroundSync();
+    return result;
   }
 
   Future<int> updateExpense(Expense expense) async {
     final db = await database;
-    return await db.update('expenses', expense.toMap(),
+    final updated = expense.copyWith(updatedAt: DateTime.now().toUtc().toIso8601String());
+    final result = await db.update('expenses', updated.toMap(),
         where: 'id = ?', whereArgs: [expense.id]);
+    _triggerBackgroundSync();
+    return result;
   }
 
   Future<List<Expense>> getAllExpenses() async {
@@ -542,7 +620,20 @@ class DatabaseHelper {
 
   Future<int> deleteExpense(int id) async {
     final db = await database;
-    return await db.delete('expenses', where: 'id = ?', whereArgs: [id]);
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user != null) {
+        Supabase.instance.client
+            .from('expenses')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('id', id)
+            .then((_) {}, onError: (e) => debugPrint('Supabase delete error: $e'));
+      }
+    } catch (_) {}
+    final result = await db.delete('expenses', where: 'id = ?', whereArgs: [id]);
+    _triggerBackgroundSync();
+    return result;
   }
 
   Future<Map<String, double>> getMonthlyProfitAndExpenses(int year, int month) async {
@@ -642,8 +733,11 @@ class DatabaseHelper {
 
   Future<int> insertSavedStop(SavedStop stop) async {
     final db = await database;
-    return await db.insert('saved_stops', stop.toMap(),
+    final updated = stop.copyWith(updatedAt: DateTime.now().toUtc().toIso8601String());
+    final result = await db.insert('saved_stops', updated.toMap(),
         conflictAlgorithm: ConflictAlgorithm.replace);
+    _triggerBackgroundSync();
+    return result;
   }
 
   Future<List<SavedStop>> getAllSavedStops() async {
@@ -654,25 +748,44 @@ class DatabaseHelper {
 
   Future<int> deleteSavedStop(int id) async {
     final db = await database;
-    return await db.delete('saved_stops', where: 'id = ?', whereArgs: [id]);
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user != null) {
+        Supabase.instance.client
+            .from('saved_stops')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('id', id)
+            .then((_) {}, onError: (e) => debugPrint('Supabase delete error: $e'));
+      }
+    } catch (_) {}
+    final result = await db.delete('saved_stops', where: 'id = ?', whereArgs: [id]);
+    _triggerBackgroundSync();
+    return result;
   }
 
   Future<void> updateSavedStopsOrder(List<SavedStop> stops) async {
     final db = await database;
     final batch = db.batch();
     for (int i = 0; i < stops.length; i++) {
+      final updated = stops[i].copyWith(
+        positionOrder: i,
+        updatedAt: DateTime.now().toUtc().toIso8601String(),
+      );
       batch.update(
         'saved_stops',
-        {'positionOrder': i},
+        updated.toMap(),
         where: 'id = ?',
         whereArgs: [stops[i].id],
       );
     }
     await batch.commit(noResult: true);
+    _triggerBackgroundSync();
   }
 
   Future<void> clearAllSavedStops() async {
     final db = await database;
     await db.delete('saved_stops');
+    _triggerBackgroundSync();
   }
 }

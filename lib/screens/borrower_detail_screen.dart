@@ -552,7 +552,7 @@ class _BorrowerDetailScreenState extends State<BorrowerDetailScreen> {
 
                         if (isPenalty) {
                           return Dismissible(
-                            key: ValueKey('charge_${charge.date.millisecondsSinceEpoch}_${charge.label}'),
+                            key: ValueKey('charge_${charge.date.millisecondsSinceEpoch}_${charge.label}_$isWaived'),
                             direction: DismissDirection.endToStart,
                             background: Container(
                               margin: const EdgeInsets.only(bottom: 10),

@@ -246,97 +246,37 @@ class _BorrowersScreenState extends State<BorrowersScreen> {
                               itemCount: filtered.length,
                               itemBuilder: (ctx, i) {
                                 final b = filtered[i];
-                                final isDue = _isDue(b) && b.dismissedWiggleDate != b.repaymentDate;
-                                return WiggleWrapper(
-                                  wiggle: isDue,
-                                  child: GestureDetector(
-                                    onTap: () async {
-                                      if (b.id != null && b.dismissedWiggleDate != b.repaymentDate) {
-                                        final updated = b.copyWith(dismissedWiggleDate: b.repaymentDate);
-                                        await db.updateBorrower(updated);
-                                      }
-                                      if (!context.mounted) return;
-                                      await Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                            builder: (_) => BorrowerDetailScreen(
-                                                borrowerId: b.id!)),
-                                      );
+                                return BorrowerGridTile(
+                                  borrower: b,
+                                  fmt: fmt,
+                                  onTap: () async {
+                                    if (b.id != null && b.dismissedWiggleDate != b.repaymentDate) {
+                                      final updated = b.copyWith(dismissedWiggleDate: b.repaymentDate);
+                                      await db.updateBorrower(updated);
+                                    }
+                                    if (!context.mounted) return;
+                                    await Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                          builder: (_) => BorrowerDetailScreen(
+                                              borrowerId: b.id!)),
+                                    );
+                                    _load();
+                                  },
+                                  onLongPress: () async {
+                                    if (b.id != null) {
+                                      final updated = b.copyWith(dismissedWiggleDate: b.repaymentDate);
+                                      await db.updateBorrower(updated);
                                       _load();
-                                    },
-                                    onLongPress: () async {
-                                      if (b.id != null) {
-                                        final updated = b.copyWith(dismissedWiggleDate: b.repaymentDate);
-                                        await db.updateBorrower(updated);
-                                        _load();
-                                        if (!context.mounted) return;
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(
-                                            content: Text('Wiggle stopped for ${b.fullName}'),
-                                            duration: const Duration(seconds: 1),
-                                          ),
-                                        );
-                                      }
-                                    },
-                                    child: Container(
-                                      padding: const EdgeInsets.all(14),
-                                      decoration: BoxDecoration(
-                                        color: AppTheme.white,
-                                        borderRadius: BorderRadius.circular(16),
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.spaceBetween,
-                                            children: [
-                                              AnimatedAvatar(
-                                                  name: b.fullName,
-                                                  size: 32),
-                                              StatusDot(status: b.status),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Text(b.fullName,
-                                              style: const TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  fontSize: 13,
-                                                  color: AppTheme.textDark),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis),
-                                          Text(
-                                            'Next Due: ${_nextDue(b)}',
-                                            style: const TextStyle(
-                                                fontSize: 10,
-                                                color: AppTheme.textGrey),
-                                          ),
-                                          const Spacer(),
-                                          b.status == 'fully_paid'
-                                              ? ImageFiltered(
-                                                  imageFilter: ImageFilter.blur(
-                                                      sigmaX: 4, sigmaY: 4),
-                                                  child: Text(
-                                                    '₱${fmt.format(b.amountBorrowed)}',
-                                                    style: const TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        fontSize: 15,
-                                                        color: AppTheme.textDark),
-                                                  ),
-                                                )
-                                              : Text(
-                                                  '₱${fmt.format(b.amountBorrowed)}',
-                                                  style: const TextStyle(
-                                                      fontWeight: FontWeight.bold,
-                                                      fontSize: 15,
-                                                      color: AppTheme.textDark),
-                                                ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text('Wiggle stopped for ${b.fullName}'),
+                                          duration: const Duration(seconds: 1),
+                                        ),
+                                      );
+                                    }
+                                  },
                                 );
                               },
                             ),
@@ -414,5 +354,214 @@ class _WiggleWrapperState extends State<WiggleWrapper>
       },
       child: widget.child,
     );
+  }
+}
+
+// ── Borrower Grid Tile with Slide Gesture Support ──
+
+class BorrowerGridTile extends StatefulWidget {
+  final Borrower borrower;
+  final NumberFormat fmt;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+
+  const BorrowerGridTile({
+    super.key,
+    required this.borrower,
+    required this.fmt,
+    required this.onTap,
+    required this.onLongPress,
+  });
+
+  @override
+  State<BorrowerGridTile> createState() => _BorrowerGridTileState();
+}
+
+class _BorrowerGridTileState extends State<BorrowerGridTile> {
+  bool _showRemainingPrincipal = false;
+  double _remainingPrincipal = 0.0;
+  bool _loading = false;
+
+  Future<void> _revealRemainingPrincipal() async {
+    if (_showRemainingPrincipal) return;
+    setState(() => _loading = true);
+    try {
+      final payments = await DatabaseHelper.instance.getPaymentsByBorrower(widget.borrower.id!);
+      final rp = widget.borrower.calculateRemainingPrincipal(payments);
+      if (mounted) {
+        setState(() {
+          _remainingPrincipal = rp;
+          _showRemainingPrincipal = true;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  void _restoreOriginal() {
+    if (!_showRemainingPrincipal) return;
+    setState(() {
+      _showRemainingPrincipal = false;
+    });
+  }
+
+  @override
+  void didUpdateWidget(BorrowerGridTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.borrower.id != widget.borrower.id) {
+      _showRemainingPrincipal = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final b = widget.borrower;
+    final isDue = _isDue(b) && b.dismissedWiggleDate != b.repaymentDate;
+
+    return GestureDetector(
+      onHorizontalDragEnd: (details) {
+        if (details.primaryVelocity != null) {
+          if (details.primaryVelocity! > 100) {
+            // Swiped right -> Reveal remaining principal
+            _revealRemainingPrincipal();
+          } else if (details.primaryVelocity! < -100) {
+            // Swiped left -> Revert back to original principal view
+            _restoreOriginal();
+          }
+        }
+      },
+      onTap: widget.onTap,
+      onLongPress: widget.onLongPress,
+      child: WiggleWrapper(
+        wiggle: isDue,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppTheme.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: _showRemainingPrincipal
+                ? [
+                    BoxShadow(
+                      color: AppTheme.navy.withValues(alpha: 0.15),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    )
+                  ]
+                : null,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  AnimatedAvatar(name: b.fullName, size: 32),
+                  StatusDot(status: b.status),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                b.fullName,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  color: AppTheme.textDark,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              Text(
+                'Next Due: ${_nextDue(b)}',
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: AppTheme.textGrey,
+                ),
+              ),
+              const Spacer(),
+              _loading
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(AppTheme.navy),
+                      ),
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (_showRemainingPrincipal) ...[
+                          const Text(
+                            'REMAINING PRINCIPAL',
+                            style: TextStyle(
+                              fontSize: 7.5,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.navy,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                          Text(
+                            '₱${widget.fmt.format(_remainingPrincipal)}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                              color: AppTheme.navy,
+                            ),
+                          ),
+                        ] else ...[
+                          b.status == 'fully_paid'
+                              ? ImageFiltered(
+                                  imageFilter: ImageFilter.blur(sigmaX: 4, sigmaY: 4),
+                                  child: Text(
+                                    '₱${widget.fmt.format(b.amountBorrowed)}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15,
+                                      color: AppTheme.textDark,
+                                    ),
+                                  ),
+                                )
+                              : Text(
+                                  '₱${widget.fmt.format(b.amountBorrowed)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                    color: AppTheme.textDark,
+                                  ),
+                                ),
+                        ],
+                      ],
+                    ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool _isDue(Borrower b) {
+    if (b.status != 'active') return false;
+    try {
+      final d = DateFormat('MM/dd/yyyy').parse(b.repaymentDate);
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final dueDay = DateTime(d.year, d.month, d.day);
+      return dueDay.isBefore(today) || dueDay.isAtSameMomentAs(today);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  String _nextDue(Borrower b) {
+    try {
+      final d = DateFormat('MM/dd/yyyy').parse(b.repaymentDate);
+      return DateFormat('MMM dd').format(d);
+    } catch (_) {
+      return b.repaymentDate;
+    }
   }
 }
