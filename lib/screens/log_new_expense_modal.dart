@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../database/database_helper.dart';
 import '../models/expense.dart';
 import '../theme/app_theme.dart';
+import '../services/supabase_sync_service.dart';
 
 class LogNewExpenseModal extends StatefulWidget {
   final VoidCallback? onExpenseLogged;
@@ -92,16 +93,14 @@ class _LogNewExpenseModalState extends State<LogNewExpenseModal> {
     await DatabaseHelper.instance.insertExpense(expense);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Expense logged successfully!'),
-          backgroundColor: AppTheme.green,
-        ),
-      );
       Navigator.pop(context);
       if (widget.onExpenseLogged != null) {
         widget.onExpenseLogged!();
       }
+      SupabaseSyncService.instance.syncWithFeedback(
+        context,
+        actionName: 'Expense',
+      );
     }
   }
 

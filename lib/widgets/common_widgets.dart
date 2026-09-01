@@ -1,8 +1,9 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+export 'vault_toast.dart';
 
-// ─── NAV BAR ─────────────────────────────────────────────────────────────────
+// ─── BOTTOM NAV BAR ───────────────────────────────────────────────────────────
 
 class VaultFloatingNav extends StatelessWidget {
   final int currentIndex;
@@ -17,86 +18,95 @@ class VaultFloatingNav extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 260,
-      height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 6),
+      height: 62,
       decoration: BoxDecoration(
-        color: const Color(0xFF1E1E1E),
-        borderRadius: BorderRadius.circular(26),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(31),
+        border: Border.all(
+          color: const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.2),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
+            color: Colors.black.withValues(alpha: 0.10),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+            spreadRadius: 0,
+          ),
+          BoxShadow(
+            color: const Color(0xFF0F172A).withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
-      child: Stack(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          // Sliding background indicator
-          AnimatedAlign(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.fastOutSlowIn,
-            alignment: currentIndex == 0
-                ? Alignment.centerLeft
-                : Alignment.centerRight,
-            child: FractionallySizedBox(
-              widthFactor: 0.5,
-              child: Container(
-                margin: const EdgeInsets.symmetric(vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF374151),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-              ),
-            ),
-          ),
-          // Interactive Text buttons
-          Row(
-            children: [
-              Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => onTap(0),
-                  child: Center(
-                    child: AnimatedDefaultTextStyle(
-                      duration: const Duration(milliseconds: 200),
-                      style: TextStyle(
-                        color: currentIndex == 0 ? Colors.white : const Color(0xFF9CA3AF),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                        letterSpacing: 0.8,
-                      ),
-                      child: const Text('DASHBOARD'),
-                    ),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => onTap(1),
-                  child: Center(
-                    child: AnimatedDefaultTextStyle(
-                      duration: const Duration(milliseconds: 200),
-                      style: TextStyle(
-                        color: currentIndex == 1 ? Colors.white : const Color(0xFF9CA3AF),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                        letterSpacing: 0.8,
-                      ),
-                      child: const Text('LEDGER'),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
+          _buildNavItem(0, 'Dashboard', Icons.space_dashboard_rounded),
+          _buildNavItem(1, 'Borrowers', Icons.groups_rounded),
+          _buildNavItem(2, 'Ledger', Icons.account_balance_wallet_rounded),
+          _buildNavItem(3, 'Expenses', Icons.pie_chart_outline_rounded),
+          _buildNavItem(4, 'Route', Icons.explore_rounded),
         ],
       ),
     );
   }
+
+  Widget _buildNavItem(int index, String label, IconData icon) {
+    final isSelected = currentIndex == index;
+    final color = isSelected ? const Color(0xFF0F172A) : const Color(0xFF8C9BB0);
+
+    return Expanded(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onTap(index),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? const Color(0xFF0F172A).withValues(alpha: 0.07)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              AnimatedScale(
+                scale: isSelected ? 1.15 : 1.0,
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeOutBack,
+                child: Icon(
+                  icon,
+                  size: 19,
+                  color: color,
+                ),
+              ),
+              const SizedBox(height: 2),
+              AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOut,
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 10,
+                  fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
+                  color: color,
+                  letterSpacing: isSelected ? -0.1 : -0.2,
+                ),
+                child: Text(label),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
+
 
 // ─── NAVY HERO CARD ──────────────────────────────────────────────────────────
 
@@ -208,7 +218,7 @@ class StatusBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(label,
@@ -383,7 +393,7 @@ class VaultTextField extends StatelessWidget {
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: AppTheme.lightGrey),
+              borderSide: const BorderSide(color: AppTheme.lightGrey),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),

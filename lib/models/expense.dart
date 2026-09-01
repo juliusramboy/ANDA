@@ -37,16 +37,18 @@ class Expense {
       };
 
   factory Expense.fromMap(Map<String, dynamic> map) => Expense(
-        id: map['id'],
-        name: map['name'],
-        amount: map['amount']?.toDouble() ?? 0.0,
-        category: map['category'] ?? '',
-        date: map['date'] ?? '',
-        notes: map['notes'],
-        type: map['type'] ?? 'expense',
-        status: map['status'] ?? 'completed',
-        isUrgent: (map['isUrgent'] ?? 0) == 1,
-        updatedAt: map['updatedAt'],
+        id: map['id'] is int ? map['id'] : (int.tryParse(map['id']?.toString() ?? '')),
+        name: map['name']?.toString() ?? '',
+        amount: map['amount'] != null
+            ? (double.tryParse(map['amount'].toString()) ?? 0.0)
+            : 0.0,
+        category: map['category']?.toString() ?? 'General',
+        date: map['date']?.toString() ?? '',
+        notes: map['notes']?.toString(),
+        type: map['type']?.toString() ?? 'expense',
+        status: map['status']?.toString() ?? 'completed',
+        isUrgent: map['isUrgent'] == 1 || map['isUrgent'] == true || map['isUrgent'] == '1',
+        updatedAt: map['updatedAt']?.toString() ?? '',
       );
 
   Expense copyWith({

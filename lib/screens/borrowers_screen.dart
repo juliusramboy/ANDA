@@ -1,33 +1,48 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../database/database_helper.dart';
 import '../models/borrower.dart';
+import '../services/pdf_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
 import 'borrower_detail_screen.dart';
 import 'add_loan_screen.dart';
+import 'record_payment_modal.dart';
 
 class BorrowersScreen extends StatefulWidget {
   const BorrowersScreen({super.key});
 
   @override
-  State<BorrowersScreen> createState() => _BorrowersScreenState();
+  State<BorrowersScreen> createState() => BorrowersScreenState();
 }
 
-class _BorrowersScreenState extends State<BorrowersScreen> {
+class BorrowersScreenState extends State<BorrowersScreen> {
   final db = DatabaseHelper.instance;
   final fmt = NumberFormat('#,##0.00');
-  List<Borrower> borrowers = [];
-  List<Borrower> filtered = [];
-  int activeCount = 0;
+
+  void refresh() {
+    _load();
+  }
+
+  List<Borrower> allBorrowers = [];
+  List<Borrower> dueBorrowers = [];
+  List<Borrower> recentBorrowers = [];
+  List<Borrower> filteredBorrowers = [];
+
   bool loading = true;
+  bool isAlertDismissed = false;
+
   final searchCtrl = TextEditingController();
   bool searching = false;
+
+  late PageController _duePageController;
+  late PageController _recentPageController;
 
   @override
   void initState() {
     super.initState();
+    _duePageController = PageController(initialPage: 1000);
+    _recentPageController = PageController(viewportFraction: 0.38, initialPage: 1000);
     _load();
     searchCtrl.addListener(_filter);
   }
@@ -35,338 +50,739 @@ class _BorrowersScreenState extends State<BorrowersScreen> {
   @override
   void dispose() {
     searchCtrl.dispose();
+    _duePageController.dispose();
+    _recentPageController.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
     final all = await db.getAllBorrowers();
-    final ac = await db.getActiveBorrowers();
-    setState(() {
-      borrowers = all;
-      filtered = all;
-      activeCount = ac;
-      loading = false;
+
+    // 1. Due Borrowers: Active borrowers sorted by closest repayment date
+    final active = all.where((b) => b.status == 'active').toList();
+    active.sort((a, b) {
+      final dateA = _parseRepaymentDate(a.repaymentDate);
+      final dateB = _parseRepaymentDate(b.repaymentDate);
+      return dateA.compareTo(dateB);
     });
+
+    // 2. Recent Borrowers: Sorted by ID / Issue Date descending
+    final recents = List<Borrower>.from(all);
+    recents.sort((a, b) => (b.id ?? 0).compareTo(a.id ?? 0));
+
+    if (mounted) {
+      setState(() {
+        allBorrowers = all;
+        dueBorrowers = active.isNotEmpty ? active : all;
+        recentBorrowers = recents;
+        filteredBorrowers = all;
+        loading = false;
+      });
+    }
+  }
+
+  DateTime _parseRepaymentDate(String dateStr) {
+    try {
+      final parts = dateStr.trim().split('/');
+      if (parts.length == 3) {
+        final month = int.parse(parts[0]);
+        final day = int.parse(parts[1]);
+        final year = int.parse(parts[2]);
+        return DateTime(year, month, day);
+      }
+    } catch (_) {}
+    try {
+      return DateTime.parse(dateStr.trim());
+    } catch (_) {}
+    return DateTime(2099);
   }
 
   void _filter() {
-    final q = searchCtrl.text.toLowerCase();
+    final q = searchCtrl.text.toLowerCase().trim();
     setState(() {
-      filtered =
-          borrowers.where((b) => b.fullName.toLowerCase().contains(q)).toList();
+      filteredBorrowers = allBorrowers
+          .where((b) =>
+              b.fullName.toLowerCase().contains(q) ||
+              b.loanReference.toLowerCase().contains(q))
+          .toList();
     });
   }
 
-  bool _isDue(Borrower b) {
-    if (b.status != 'active') return false;
-    try {
-      final d = DateFormat('MM/dd/yyyy').parse(b.repaymentDate);
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      final dueDay = DateTime(d.year, d.month, d.day);
-      return dueDay.isBefore(today) || dueDay.isAtSameMomentAs(today);
-    } catch (_) {
-      return false;
+  String _getDueStatusText(Borrower b) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final dueDate = _parseRepaymentDate(b.repaymentDate);
+    final diff = dueDate.difference(today).inDays;
+
+    if (diff < 0) {
+      return 'Overdue by ${-diff} day${-diff == 1 ? '' : 's'} (${b.repaymentDate})';
+    } else if (diff == 0) {
+      return 'Due Today (${b.repaymentDate})';
+    } else if (diff == 1) {
+      return 'Due tomorrow (${b.repaymentDate})';
+    } else {
+      return 'Due in $diff days (${b.repaymentDate})';
     }
   }
 
-  String _nextDue(Borrower b) {
-    try {
-      final d = DateFormat('MM/dd/yyyy').parse(b.repaymentDate);
-      return DateFormat('MMM dd').format(d);
-    } catch (_) {
-      return b.repaymentDate;
-    }
+  void _showBorrowerQuickActions(Borrower b) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: const BoxDecoration(
+          color: AppTheme.white,
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(24),
+            topRight: Radius.circular(24),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                AnimatedAvatar(name: b.fullName, size: 40),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        b.fullName,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.navy,
+                        ),
+                      ),
+                      Text(
+                        b.loanReference,
+                        style: const TextStyle(fontSize: 12, color: AppTheme.textGrey),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  icon: const Icon(Icons.close, color: AppTheme.textDark),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: const Icon(Icons.payment, color: AppTheme.navy),
+              title: const Text('Record Payment', style: TextStyle(fontWeight: FontWeight.bold)),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  backgroundColor: Colors.transparent,
+                  builder: (_) => RecordPaymentModal(
+                    borrower: b,
+                  ),
+                );
+                _load();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.description_outlined, color: AppTheme.navy),
+              title: const Text('View Full Contract', style: TextStyle(fontWeight: FontWeight.bold)),
+              onTap: () {
+                Navigator.pop(ctx);
+                PdfService.viewContract(context, b);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined, color: AppTheme.navy),
+              title: const Text('Edit Loan Agreement', style: TextStyle(fontWeight: FontWeight.bold)),
+              onTap: () async {
+                Navigator.pop(ctx);
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => AddLoanScreen(existing: b)),
+                );
+                _load();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: AppTheme.cream,
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _load,
               child: SafeArea(
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 100),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // ── Top Bar with Back & Search ──
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          // ── Header ──
-                          Row(
-                            children: [
-                              if (Navigator.canPop(context)) ...[
-                                IconButton(
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(),
-                                  onPressed: () => Navigator.pop(context),
-                                  icon: const Icon(
-                                    Icons.arrow_back_ios_new,
-                                    size: 20,
-                                    color: AppTheme.navy,
-                                  ),
+                          if (Navigator.canPop(context))
+                            GestureDetector(
+                              onTap: () => Navigator.pop(context),
+                              child: Container(
+                                width: 42,
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF3EFEA),
+                                  borderRadius: BorderRadius.circular(14),
                                 ),
-                                const SizedBox(width: 12),
-                              ],
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text('YOUR VAULT',
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            color: AppTheme.textGrey,
-                                            fontWeight: FontWeight.bold,
-                                            letterSpacing: 0.5)),
-                                    Text(
-                                      '${borrowers.length} Borrowers.',
-                                      style: const TextStyle(
-                                          fontSize: 26,
-                                          fontWeight: FontWeight.bold,
-                                          color: AppTheme.textDark),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
+                                child: const Icon(
+                                  Icons.arrow_back_ios_new,
+                                  size: 18,
+                                  color: AppTheme.textDark,
                                 ),
                               ),
-                              Row(
-                                children: [
-                                  IconButton(
-                                    onPressed: () =>
-                                        setState(() => searching = !searching),
-                                    icon: const Icon(Icons.search),
+                            )
+                          else
+                            const Text(
+                              'Borrowers',
+                              style: TextStyle(
+                                fontSize: 26,
+                                fontWeight: FontWeight.w900,
+                                color: AppTheme.textDark,
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                          Row(
+                            children: [
+                              GestureDetector(
+                                onTap: () => setState(() => searching = !searching),
+                                child: Container(
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
+                                    color: searching ? AppTheme.navy : const Color(0xFFF3EFEA),
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: Icon(
+                                    searching ? Icons.close : Icons.search_rounded,
+                                    size: 20,
+                                    color: searching ? Colors.white : AppTheme.textDark,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              GestureDetector(
+                                onTap: () async {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => const AddLoanScreen()),
+                                  );
+                                  _load();
+                                },
+                                child: Container(
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
                                     color: AppTheme.navy,
+                                    borderRadius: BorderRadius.circular(14),
                                   ),
-                                  Container(
-                                    decoration: const BoxDecoration(
-                                        color: AppTheme.navy,
-                                        shape: BoxShape.circle),
-                                    child: IconButton(
-                                      onPressed: () async {
-                                        await Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                              builder: (_) =>
-                                                  const AddLoanScreen()),
-                                        );
-                                        _load();
-                                      },
-                                      icon: const Icon(Icons.add,
-                                          color: AppTheme.white),
-                                    ),
+                                  child: const Icon(
+                                    Icons.add,
+                                    color: Colors.white,
+                                    size: 22,
                                   ),
-                                ],
+                                ),
                               ),
                             ],
                           ),
-
-                          if (searching) ...[
-                            const SizedBox(height: 12),
-                            TextField(
-                              controller: searchCtrl,
-                              autofocus: true,
-                              decoration: InputDecoration(
-                                hintText: 'Search borrowers...',
-                                prefixIcon: const Icon(Icons.search),
-                                filled: true,
-                                fillColor: AppTheme.white,
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide.none,
-                                ),
-                              ),
-                            ),
-                          ],
-
-                          const SizedBox(height: 16),
-
-                          // ── Active card ──
-                          NavyCard(
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                Positioned(
-                                  right: 0,
-                                  top: -10,
-                                  child: Text(
-                                    '$activeCount',
-                                    style: TextStyle(
-                                      fontSize: 80,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppTheme.yellow.withOpacity(0.3),
-                                    ),
-                                  ),
-                                ),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Icon(Icons.people,
-                                        color: AppTheme.yellow, size: 28),
-                                    const SizedBox(height: 8),
-                                    const Text(
-                                      'Active Borrowers',
-                                      style: TextStyle(
-                                          color: AppTheme.white,
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold),
-                                    ),
-                                    const Text(
-                                      'Currently enrolled and active',
-                                      style: TextStyle(
-                                          color: Colors.white60, fontSize: 12),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 16),
                         ],
                       ),
-                    ),
 
-                    // ── Grid ──
-                    Expanded(
-                      child: filtered.isEmpty
-                          ? const Center(
-                              child: Text('No borrowers found.',
-                                  style: TextStyle(color: AppTheme.textGrey)))
-                          : GridView.builder(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 20),
-                              gridDelegate:
-                                  const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 2,
-                                crossAxisSpacing: 12,
-                                mainAxisSpacing: 12,
-                                childAspectRatio: 1.1,
+                      if (searching) ...[
+                        const SizedBox(height: 14),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.04),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
                               ),
-                              itemCount: filtered.length,
-                              itemBuilder: (ctx, i) {
-                                final b = filtered[i];
-                                return BorrowerGridTile(
-                                  borrower: b,
-                                  fmt: fmt,
-                                  onTap: () async {
-                                    if (b.id != null && b.dismissedWiggleDate != b.repaymentDate) {
-                                      final updated = b.copyWith(dismissedWiggleDate: b.repaymentDate);
-                                      await db.updateBorrower(updated);
-                                    }
-                                    if (!context.mounted) return;
-                                    await Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                          builder: (_) => BorrowerDetailScreen(
-                                              borrowerId: b.id!)),
-                                    );
-                                    _load();
-                                  },
-                                  onLongPress: () async {
-                                    if (b.id != null) {
-                                      final updated = b.copyWith(dismissedWiggleDate: b.repaymentDate);
-                                      await db.updateBorrower(updated);
-                                      _load();
-                                      if (!context.mounted) return;
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text('Wiggle stopped for ${b.fullName}'),
-                                          duration: const Duration(seconds: 1),
-                                        ),
-                                      );
-                                    }
-                                  },
-                                );
-                              },
+                            ],
+                          ),
+                          child: TextField(
+                            controller: searchCtrl,
+                            autofocus: true,
+                            style: const TextStyle(fontSize: 14, color: AppTheme.textDark),
+                            decoration: InputDecoration(
+                              hintText: 'Search borrowers by name or loan reference...',
+                              hintStyle: const TextStyle(fontSize: 13, color: AppTheme.textGrey),
+                              prefixIcon: const Icon(Icons.search, size: 20, color: AppTheme.textGrey),
+                              suffixIcon: searchCtrl.text.isNotEmpty
+                                  ? IconButton(
+                                      icon: const Icon(Icons.clear, size: 16),
+                                      onPressed: () {
+                                        searchCtrl.clear();
+                                      },
+                                    )
+                                  : null,
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 12),
                             ),
-                    ),
-                  ],
+                          ),
+                        ),
+                      ],
+
+                      const SizedBox(height: 16),
+
+                      // ── Big Profile Card (Due Borrower Book / Stack / Carousel) ──
+                      if (dueBorrowers.isNotEmpty)
+                        SizedBox(
+                          height: 250,
+                          child: PageView.builder(
+                            controller: _duePageController,
+                            itemBuilder: (context, index) {
+                              final b = dueBorrowers[index % dueBorrowers.length];
+                              return _buildDueBorrowerCard(b);
+                            },
+                          ),
+                        )
+                      else
+                        _buildEmptyDueCard(),
+
+                      const SizedBox(height: 16),
+
+                      // ── Nearly Due Alert Banner ──
+                      if (!isAlertDismissed && dueBorrowers.isNotEmpty)
+                        _buildNearlyDueBanner(dueBorrowers.first),
+
+                      const SizedBox(height: 24),
+
+                      // ── Section Header ──
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            searching ? 'Search Results' : 'Borrowers Directory',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                              color: AppTheme.textDark,
+                            ),
+                          ),
+                          Text(
+                            '${filteredBorrowers.length} account${filteredBorrowers.length == 1 ? '' : 's'}',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF64748B),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+
+                      // ── 3-Column Scrollable Borrowers Grid (3 Boxes Per Row) ──
+                      if (filteredBorrowers.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 36),
+                          child: Center(
+                            child: Text(
+                              'No borrowers found.',
+                              style: TextStyle(color: AppTheme.textGrey, fontSize: 13),
+                            ),
+                          ),
+                        )
+                      else
+                        GridView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            crossAxisSpacing: 10,
+                            mainAxisSpacing: 10,
+                            childAspectRatio: 0.78,
+                          ),
+                          itemCount: filteredBorrowers.length,
+                          itemBuilder: (ctx, i) {
+                            final b = filteredBorrowers[i];
+                            return _BorrowerGridTile3Col(
+                              borrower: b,
+                              fmt: fmt,
+                              onTap: () async {
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => BorrowerDetailScreen(borrowerId: b.id!),
+                                  ),
+                                );
+                                _load();
+                              },
+                              onLongPress: () {
+                                _showBorrowerQuickActions(b);
+                              },
+                            );
+                          },
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
     );
   }
-}
 
-class WiggleWrapper extends StatefulWidget {
-  final Widget child;
-  final bool wiggle;
+  // ── Big Profile Card with Contract Sneak Peak ──
+  Widget _buildDueBorrowerCard(Borrower b) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 2),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(26),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          // ── Contract Sneak Peak Background ──
+          Positioned.fill(
+            child: Opacity(
+              opacity: 0.85,
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
+                color: const Color(0xFFF9F6F0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Text(
+                          'PROMISSORY NOTE',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            color: Colors.black.withValues(alpha: 0.25),
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                        const SizedBox(width: 44), // space for expand button
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      '"Agreement") is entered into and made effective as of ${b.issueDate}, by and between ANDA and ${b.fullName}, under the loan terms and covenants detailed...',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: Colors.black.withValues(alpha: 0.28),
+                        height: 1.3,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      height: 1,
+                      color: Colors.black.withValues(alpha: 0.06),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('ISSUE DATE', style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.black.withValues(alpha: 0.25))),
+                        Text('${b.interestRate}% RATE', style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.black.withValues(alpha: 0.25))),
+                        Text('PHP ${fmt.format(b.amountBorrowed)}', style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.black.withValues(alpha: 0.25))),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
 
-  const WiggleWrapper({super.key, required this.child, required this.wiggle});
+          // ── Upper Right Expand Button (Full Show Contract) ──
+          Positioned(
+            top: 14,
+            right: 14,
+            child: GestureDetector(
+              onTap: () {
+                PdfService.viewContract(context, b);
+              },
+              child: Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.crop_free_rounded,
+                  color: Color(0xFF64748B),
+                  size: 19,
+                ),
+              ),
+            ),
+          ),
 
-  @override
-  State<WiggleWrapper> createState() => _WiggleWrapperState();
-}
+          // ── Bottom Foreground Card Content ──
+          Positioned(
+            left: 18,
+            right: 18,
+            bottom: 18,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Borrower Avatar + Name + Due Date Row
+                Row(
+                  children: [
+                    AnimatedAvatar(name: b.fullName, size: 42),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            b.fullName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                              color: AppTheme.textDark,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              Container(
+                                width: 6,
+                                height: 6,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFFE53E3E),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  _getDueStatusText(b),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFFE53E3E),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
 
-class _WiggleWrapperState extends State<WiggleWrapper>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _animation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 500),
-    );
-
-    _animation = Tween<double>(begin: -0.025, end: 0.025).animate(
-      CurvedAnimation(
-        parent: _controller,
-        curve: Curves.easeInOut,
+                // Actions Row: Check Info & More Button
+                Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () async {
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => BorrowerDetailScreen(borrowerId: b.id!),
+                            ),
+                          );
+                          _load();
+                        },
+                        child: Container(
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFC68A0E),
+                            borderRadius: BorderRadius.circular(14),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFFC68A0E).withValues(alpha: 0.3),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          alignment: Alignment.center,
+                          child: const Text(
+                            'Check Info',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    GestureDetector(
+                      onTap: () => _showBorrowerQuickActions(b),
+                      child: Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF6F2EA),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.black.withValues(alpha: 0.04)),
+                        ),
+                        child: const Icon(
+                          Icons.more_horiz,
+                          color: AppTheme.textDark,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
-
-    if (widget.wiggle) {
-      _controller.repeat(reverse: true);
-    }
   }
 
-  @override
-  void didUpdateWidget(WiggleWrapper oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.wiggle && !oldWidget.wiggle) {
-      _controller.repeat(reverse: true);
-    } else if (!widget.wiggle && oldWidget.wiggle) {
-      _controller.stop();
-      _controller.reset();
-    }
+  Widget _buildEmptyDueCard() {
+    return Container(
+      height: 220,
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(26),
+      ),
+      child: const Center(
+        child: Text(
+          'No upcoming due borrowers at this time.',
+          style: TextStyle(color: AppTheme.textGrey),
+        ),
+      ),
+    );
   }
 
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+  // ── Nearly Due Alert Banner ──
+  Widget _buildNearlyDueBanner(Borrower firstDue) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final dueDate = _parseRepaymentDate(firstDue.repaymentDate);
+    final diff = dueDate.difference(today).inDays;
 
-  @override
-  Widget build(BuildContext context) {
-    if (!widget.wiggle) return widget.child;
-    return AnimatedBuilder(
-      animation: _animation,
-      builder: (context, child) {
-        return Transform.rotate(
-          angle: _animation.value,
-          child: child,
-        );
-      },
-      child: widget.child,
+    final dueText = diff <= 0
+        ? "payment is due today (${firstDue.repaymentDate})."
+        : "payment is due in $diff day${diff == 1 ? '' : 's'} (${firstDue.repaymentDate}).";
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFECEB),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFFFD1CF)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.receipt_long_rounded,
+              color: Color(0xFFE53E3E),
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${dueBorrowers.length} Borrower${dueBorrowers.length == 1 ? '' : 's'} Nearly Due',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF1E1E24),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  "${firstDue.fullName}'s $dueText",
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF71717A),
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                isAlertDismissed = true;
+              });
+            },
+            child: const Padding(
+              padding: EdgeInsets.all(4),
+              child: Icon(
+                Icons.close,
+                size: 16,
+                color: Color(0xFF9CA3AF),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-// ── Borrower Grid Tile with Slide Gesture Support ──
-
-class BorrowerGridTile extends StatefulWidget {
+// ── 3-Column Borrower Grid Tile (3 Boxes Per Row) ──
+class _BorrowerGridTile3Col extends StatelessWidget {
   final Borrower borrower;
   final NumberFormat fmt;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
 
-  const BorrowerGridTile({
-    super.key,
+  const _BorrowerGridTile3Col({
     required this.borrower,
     required this.fmt,
     required this.onTap,
@@ -374,194 +790,82 @@ class BorrowerGridTile extends StatefulWidget {
   });
 
   @override
-  State<BorrowerGridTile> createState() => _BorrowerGridTileState();
-}
-
-class _BorrowerGridTileState extends State<BorrowerGridTile> {
-  bool _showRemainingPrincipal = false;
-  double _remainingPrincipal = 0.0;
-  bool _loading = false;
-
-  Future<void> _revealRemainingPrincipal() async {
-    if (_showRemainingPrincipal) return;
-    setState(() => _loading = true);
-    try {
-      final payments = await DatabaseHelper.instance.getPaymentsByBorrower(widget.borrower.id!);
-      final rp = widget.borrower.calculateRemainingPrincipal(payments);
-      if (mounted) {
-        setState(() {
-          _remainingPrincipal = rp;
-          _showRemainingPrincipal = true;
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
-    }
-  }
-
-  void _restoreOriginal() {
-    if (!_showRemainingPrincipal) return;
-    setState(() {
-      _showRemainingPrincipal = false;
-    });
-  }
-
-  @override
-  void didUpdateWidget(BorrowerGridTile oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.borrower.id != widget.borrower.id) {
-      _showRemainingPrincipal = false;
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final b = widget.borrower;
-    final isDue = _isDue(b) && b.dismissedWiggleDate != b.repaymentDate;
+    final b = borrower;
 
     return GestureDetector(
-      onHorizontalDragEnd: (details) {
-        if (details.primaryVelocity != null) {
-          if (details.primaryVelocity! > 100) {
-            // Swiped right -> Reveal remaining principal
-            _revealRemainingPrincipal();
-          } else if (details.primaryVelocity! < -100) {
-            // Swiped left -> Revert back to original principal view
-            _restoreOriginal();
-          }
-        }
-      },
-      onTap: widget.onTap,
-      onLongPress: widget.onLongPress,
-      child: WiggleWrapper(
-        wiggle: isDue,
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: AppTheme.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: _showRemainingPrincipal
-                ? [
-                    BoxShadow(
-                      color: AppTheme.navy.withValues(alpha: 0.15),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    )
-                  ]
-                : null,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: const Color(0xFFF1F5F9),
+            width: 1.2,
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  AnimatedAvatar(name: b.fullName, size: 32),
-                  StatusDot(status: b.status),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                b.fullName,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                  color: AppTheme.textDark,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                AnimatedAvatar(name: b.fullName, size: 28),
+                StatusDot(status: b.status),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  b.fullName,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 11.5,
+                    color: AppTheme.textDark,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              Text(
-                'Next Due: ${_nextDue(b)}',
-                style: const TextStyle(
-                  fontSize: 10,
-                  color: AppTheme.textGrey,
+                const SizedBox(height: 2),
+                Text(
+                  b.loanReference,
+                  style: const TextStyle(
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF94A3B8),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
+              ],
+            ),
+            Text(
+              '₱${fmt.format(b.amountBorrowed)}',
+              style: const TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 12,
+                color: Color(0xFFC68A0E),
+                letterSpacing: -0.2,
               ),
-              const Spacer(),
-              _loading
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(AppTheme.navy),
-                      ),
-                    )
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (_showRemainingPrincipal) ...[
-                          const Text(
-                            'REMAINING PRINCIPAL',
-                            style: TextStyle(
-                              fontSize: 7.5,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.navy,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                          Text(
-                            '₱${widget.fmt.format(_remainingPrincipal)}',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                              color: AppTheme.navy,
-                            ),
-                          ),
-                        ] else ...[
-                          b.status == 'fully_paid'
-                              ? ImageFiltered(
-                                  imageFilter: ImageFilter.blur(sigmaX: 4, sigmaY: 4),
-                                  child: Text(
-                                    '₱${widget.fmt.format(b.amountBorrowed)}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 15,
-                                      color: AppTheme.textDark,
-                                    ),
-                                  ),
-                                )
-                              : Text(
-                                  '₱${widget.fmt.format(b.amountBorrowed)}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 15,
-                                    color: AppTheme.textDark,
-                                  ),
-                                ),
-                        ],
-                      ],
-                    ),
-            ],
-          ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
         ),
       ),
     );
-  }
-
-  bool _isDue(Borrower b) {
-    if (b.status != 'active') return false;
-    try {
-      final d = DateFormat('MM/dd/yyyy').parse(b.repaymentDate);
-      final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
-      final dueDay = DateTime(d.year, d.month, d.day);
-      return dueDay.isBefore(today) || dueDay.isAtSameMomentAs(today);
-    } catch (_) {
-      return false;
-    }
-  }
-
-  String _nextDue(Borrower b) {
-    try {
-      final d = DateFormat('MM/dd/yyyy').parse(b.repaymentDate);
-      return DateFormat('MMM dd').format(d);
-    } catch (_) {
-      return b.repaymentDate;
-    }
   }
 }

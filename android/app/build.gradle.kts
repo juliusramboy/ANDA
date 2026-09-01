@@ -8,8 +8,7 @@ android {
     
     // Set your main application to compile against SDK 36
     compileSdk = 36
-    
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

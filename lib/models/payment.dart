@@ -31,14 +31,18 @@ class Payment {
       };
 
   factory Payment.fromMap(Map<String, dynamic> map) => Payment(
-        id: map['id'],
-        borrowerId: map['borrowerId'],
-        amount: (map['amount'] as num).toDouble(),
-        paymentType: map['paymentType'],
-        paymentDate: map['paymentDate'],
-        notes: map['notes'],
-        status: map['status'] ?? 'paid',
-        updatedAt: map['updatedAt'],
+        id: map['id'] is int ? map['id'] : (int.tryParse(map['id']?.toString() ?? '')),
+        borrowerId: map['borrowerId'] is int
+            ? map['borrowerId']
+            : (int.tryParse(map['borrowerId']?.toString() ?? '') ?? 0),
+        amount: map['amount'] != null
+            ? (double.tryParse(map['amount'].toString()) ?? 0.0)
+            : 0.0,
+        paymentType: map['paymentType']?.toString() ?? 'Interest',
+        paymentDate: map['paymentDate']?.toString() ?? '',
+        notes: map['notes']?.toString(),
+        status: map['status']?.toString() ?? 'paid',
+        updatedAt: map['updatedAt']?.toString() ?? '',
       );
 
   Payment copyWith({

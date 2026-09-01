@@ -28,13 +28,19 @@ class SavedStop {
       };
 
   factory SavedStop.fromMap(Map<String, dynamic> map) => SavedStop(
-        id: map['id'],
-        name: map['name'] ?? '',
-        address: map['address'],
-        latitude: map['latitude']?.toDouble() ?? 0.0,
-        longitude: map['longitude']?.toDouble() ?? 0.0,
-        positionOrder: map['positionOrder'] ?? 0,
-        updatedAt: map['updatedAt'],
+        id: map['id'] is int ? map['id'] : (int.tryParse(map['id']?.toString() ?? '')),
+        name: map['name']?.toString() ?? '',
+        address: map['address']?.toString(),
+        latitude: map['latitude'] != null
+            ? (double.tryParse(map['latitude'].toString()) ?? 0.0)
+            : 0.0,
+        longitude: map['longitude'] != null
+            ? (double.tryParse(map['longitude'].toString()) ?? 0.0)
+            : 0.0,
+        positionOrder: map['positionOrder'] is int
+            ? map['positionOrder']
+            : (int.tryParse(map['positionOrder']?.toString() ?? '') ?? 0),
+        updatedAt: map['updatedAt']?.toString() ?? '',
       );
 
   SavedStop copyWith({

@@ -9,6 +9,7 @@ import 'package:printing/printing.dart';
 import 'package:intl/intl.dart';
 import '../models/borrower.dart';
 import '../models/payment.dart';
+import '../widgets/vault_toast.dart';
 
 class PdfService {
   static String _toTagalogDate(String dateStr) {
@@ -705,12 +706,7 @@ class PdfService {
           final file = File('${dir.path}/$fileName');
           await file.writeAsBytes(bytes);
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Saved to Downloads: $fileName'),
-                backgroundColor: Colors.green,
-              ),
-            );
+            VaultToast.showSuccess(context, 'Saved to Downloads: $fileName');
           }
           return;
         }
@@ -729,9 +725,7 @@ class PdfService {
         );
       } catch (err) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to save or share PDF: $err')),
-          );
+          VaultToast.showError(context, 'Failed to save or share PDF: $err');
         }
       }
     }
@@ -746,9 +740,7 @@ class PdfService {
       await savePdfToDownloads(context, fileName, bytes);
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to generate PDF: $e')),
-        );
+        VaultToast.showError(context, 'Failed to generate PDF: $e');
       }
     }
   }
@@ -762,9 +754,7 @@ class PdfService {
       await savePdfToDownloads(context, fileName, bytes);
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to generate PDF: $e')),
-        );
+        VaultToast.showError(context, 'Failed to generate PDF: $e');
       }
     }
   }
@@ -779,9 +769,7 @@ class PdfService {
       );
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to generate PDF: $e')),
-        );
+        VaultToast.showError(context, 'Failed to generate PDF: $e');
       }
     }
   }
@@ -797,9 +785,7 @@ class PdfService {
       );
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to share PDF: $e')),
-        );
+        VaultToast.showError(context, 'Failed to share PDF: $e');
       }
     }
   }
@@ -1201,9 +1187,7 @@ class PdfService {
       );
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to generate PDF: $e')),
-        );
+        VaultToast.showError(context, 'Failed to generate PDF: $e');
       }
     }
   }
@@ -1220,9 +1204,7 @@ class PdfService {
       );
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to share PDF: $e')),
-        );
+        VaultToast.showError(context, 'Failed to share PDF: $e');
       }
     }
   }

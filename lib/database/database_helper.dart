@@ -8,6 +8,7 @@ import '../models/borrower.dart';
 import '../models/payment.dart';
 import '../models/expense.dart';
 import '../models/saved_stop.dart';
+import '../models/pinned_location.dart';
 import '../services/supabase_sync_service.dart';
 
 class DatabaseHelper {
@@ -19,14 +20,9 @@ class DatabaseHelper {
   void _triggerBackgroundSync() {
     Future.microtask(() async {
       try {
-        if (SupabaseSyncService.instance.isLoggedIn) {
-          final settings = await SupabaseSyncService.instance.loadProfileSettings();
-          if (settings['syncEnabled'] == true) {
-            await SupabaseSyncService.instance.syncAll();
-          }
-        }
+        await SupabaseSyncService.instance.syncAll();
       } catch (e) {
-        debugPrint('Auto background sync failed: $e');
+        debugPrint('Background sync error: $e');
       }
     });
   }
@@ -42,7 +38,7 @@ class DatabaseHelper {
     final path = join(dbPath, fileName);
     return await openDatabase(
       path,
-      version: 10,
+      version: 11,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -107,6 +103,18 @@ class DatabaseHelper {
         latitude REAL NOT NULL,
         longitude REAL NOT NULL,
         positionOrder INTEGER NOT NULL DEFAULT 0,
+        updatedAt TEXT NOT NULL DEFAULT ''
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE pinned_locations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        address TEXT,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        category TEXT NOT NULL DEFAULT 'custom',
         updatedAt TEXT NOT NULL DEFAULT ''
       )
     ''');
@@ -199,6 +207,23 @@ class DatabaseHelper {
         await db.execute("ALTER TABLE saved_stops ADD COLUMN updatedAt TEXT DEFAULT ''");
       } catch (e) {
         debugPrint('Database upgrade warning version 10: $e');
+      }
+    }
+    if (oldVersion < 11) {
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS pinned_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            address TEXT,
+            latitude REAL NOT NULL,
+            longitude REAL NOT NULL,
+            category TEXT NOT NULL DEFAULT 'custom',
+            updatedAt TEXT NOT NULL DEFAULT ''
+          )
+        ''');
+      } catch (e) {
+        debugPrint('Database upgrade warning version 11: $e');
       }
     }
   }
@@ -495,19 +520,68 @@ class DatabaseHelper {
   }
 
   Future<double> getTotalYield() async {
+    final now = DateTime.now();
+    return getYieldForMonth(now.year, now.month);
+  }
+
+  Future<double> getYieldForMonth(int year, int month) async {
     final db = await database;
-    final paymentsResult = await db.rawQuery(
-      "SELECT SUM(amount) as total FROM payments WHERE status = 'paid' AND paymentType IN ('Interest', 'Late Fee')"
+    final monthStr = month.toString().padLeft(2, '0');
+    final yearStr = year.toString();
+
+    // Sum interest and late fees paid in this month
+    final payments = await db.query(
+      'payments',
+      where: "status = 'paid' AND paymentType IN ('Interest', 'Late Fee')",
     );
-    double totalPaymentsInterest = (paymentsResult.first['total'] as num?)?.toDouble() ?? 0.0;
-    
+
+    double totalInterest = 0.0;
+    for (final p in payments) {
+      final date = p['paymentDate'] as String? ?? '';
+      final parts = date.split('/');
+      if (parts.length == 3) {
+        final pMonth = parts[0].padLeft(2, '0');
+        final pYear = parts[2];
+        if (pMonth == monthStr && pYear == yearStr) {
+          totalInterest += (p['amount'] as num?)?.toDouble() ?? 0.0;
+        }
+      }
+    }
+
+    // Sum income for this month
     double totalIncome = 0.0;
     try {
-      final result = await db.rawQuery("SELECT SUM(amount) as total FROM expenses WHERE type = 'income'");
-      totalIncome = (result.first['total'] as num?)?.toDouble() ?? 0.0;
+      final expenses = await db.query('expenses', where: "type = 'income'");
+      for (final e in expenses) {
+        final date = e['date'] as String? ?? '';
+        final parts = date.split('/');
+        if (parts.length == 3) {
+          final eMonth = parts[0].padLeft(2, '0');
+          final eYear = parts[2];
+          if (eMonth == monthStr && eYear == yearStr) {
+            totalIncome += (e['amount'] as num?)?.toDouble() ?? 0.0;
+          }
+        }
+      }
     } catch (_) {}
-    
-    return totalPaymentsInterest + totalIncome;
+
+    return totalInterest + totalIncome;
+  }
+
+  Future<double> getProfitGrowthPercentage() async {
+    final now = DateTime.now();
+    final currentMonthYield = await getYieldForMonth(now.year, now.month);
+
+    final lastMonthDate = DateTime(now.year, now.month - 1, 1);
+    final lastMonthYield = await getYieldForMonth(lastMonthDate.year, lastMonthDate.month);
+
+    if (lastMonthYield <= 0) {
+      if (currentMonthYield > 0) return 100.0;
+      return 0.0;
+    }
+
+    final growth = ((currentMonthYield - lastMonthYield) / lastMonthYield) * 100.0;
+    return growth;
   }
 
   Future<List<Borrower>> getUpcomingDueBorrowers() async {
@@ -787,5 +861,132 @@ class DatabaseHelper {
     final db = await database;
     await db.delete('saved_stops');
     _triggerBackgroundSync();
+  }
+
+  // ─── PINNED LOCATIONS CRUD (HOME, OFFICE, SHOP, ETC.) ─────────
+
+  Future<int> insertPinnedLocation(PinnedLocation pin) async {
+    final db = await database;
+    final updated = pin.copyWith(updatedAt: DateTime.now().toUtc().toIso8601String());
+    final result = await db.insert('pinned_locations', updated.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    _triggerBackgroundSync();
+    return result;
+  }
+
+  Future<List<PinnedLocation>> getAllPinnedLocations() async {
+    final db = await database;
+    try {
+      final maps = await db.query('pinned_locations', orderBy: 'id DESC');
+      return maps.map((m) => PinnedLocation.fromMap(m)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<int> updatePinnedLocation(PinnedLocation pin) async {
+    final db = await database;
+    final updated = pin.copyWith(updatedAt: DateTime.now().toUtc().toIso8601String());
+    final result = await db.update('pinned_locations', updated.toMap(),
+        where: 'id = ?', whereArgs: [pin.id]);
+    _triggerBackgroundSync();
+    return result;
+  }
+
+  Future<int> deletePinnedLocation(int id) async {
+    final db = await database;
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user != null) {
+        Supabase.instance.client
+            .from('pinned_locations')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('id', id)
+            .then((_) {}, onError: (e) => debugPrint('Supabase delete error: $e'));
+      }
+    } catch (_) {}
+    final result = await db.delete('pinned_locations', where: 'id = ?', whereArgs: [id]);
+    _triggerBackgroundSync();
+    return result;
+  }
+
+  // ─── HIGH PERFORMANCE BATCH SYNC METHODS (Zero Recursion & Instant Commit) ───
+
+  Future<void> syncBatchUpsertBorrowers(List<Borrower> borrowers) async {
+    if (borrowers.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final b in borrowers) {
+      batch.insert(
+        'borrowers',
+        b.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<void> syncBatchUpsertPayments(List<Payment> payments) async {
+    if (payments.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    final Set<int> borrowerIdsToRecalc = {};
+    for (final p in payments) {
+      batch.insert(
+        'payments',
+        p.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      borrowerIdsToRecalc.add(p.borrowerId);
+    }
+    await batch.commit(noResult: true);
+
+    // Recalculate status for affected borrowers
+    for (final bId in borrowerIdsToRecalc) {
+      await updateBorrowerStatusIfNeeded(bId);
+    }
+  }
+
+  Future<void> syncBatchUpsertExpenses(List<Expense> expenses) async {
+    if (expenses.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final e in expenses) {
+      batch.insert(
+        'expenses',
+        e.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<void> syncBatchUpsertSavedStops(List<SavedStop> stops) async {
+    if (stops.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final s in stops) {
+      batch.insert(
+        'saved_stops',
+        s.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
+  }
+
+  Future<void> syncBatchUpsertPinnedLocations(List<PinnedLocation> pins) async {
+    if (pins.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final p in pins) {
+      batch.insert(
+        'pinned_locations',
+        p.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
   }
 }

@@ -5,6 +5,8 @@ import '../database/database_helper.dart';
 import '../theme/app_theme.dart';
 import '../main.dart';
 import '../services/auth_service.dart';
+import '../services/supabase_sync_service.dart';
+import '../widgets/vault_toast.dart';
 
 class LockScreen extends StatefulWidget {
   final bool isOverlay;
@@ -22,26 +24,46 @@ class _LockScreenState extends State<LockScreen> {
   int _dueThisMonthCount = 0;
   bool _isLoadingCount = true;
   String _errorMessage = '';
-  bool _showSplash = true;
+  bool _showSplash = false;
   bool _showSplashSubtitle = false;
   bool _canUseBiometrics = false;
+  String _greetingName = 'LENDER';
 
   @override
   void initState() {
     super.initState();
     LockScreen.isVisible = true;
-    _showSplash = !widget.isOverlay;
+    _showSplash = false;
+    _loadProfileName();
     _loadDueCount();
     _initBiometrics();
   }
 
+  Future<void> _loadProfileName() async {
+    try {
+      final settings = await SupabaseSyncService.instance.loadProfileSettings();
+      final name = settings['fullName'] as String? ?? '';
+      if (mounted) {
+        setState(() {
+          if (name.trim().isNotEmpty) {
+            _greetingName = name.trim().toUpperCase();
+          } else {
+            _greetingName = 'LENDER';
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
   Future<void> _initBiometrics() async {
+    final settings = await SupabaseSyncService.instance.loadProfileSettings();
+    final isBiometricsEnabled = settings['isBiometricsEnabled'] ?? false;
     final canUse = await AuthService.canAuthenticate();
     if (mounted) {
       setState(() {
-        _canUseBiometrics = canUse;
+        _canUseBiometrics = canUse && isBiometricsEnabled;
       });
-      if (widget.isOverlay && canUse) {
+      if (isBiometricsEnabled && canUse) {
         _authenticateBiometrically();
       }
     }
@@ -112,47 +134,43 @@ class _LockScreenState extends State<LockScreen> {
               ),
             ),
             const SizedBox(height: 24),
+            // "ANDA" text appearing after a slight delay
             TypewriterText(
               text: 'ANDA',
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
+              speed: const Duration(milliseconds: 70),
               style: const TextStyle(
                 color: AppTheme.navy,
-                fontSize: 34,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 4.0,
+                fontSize: 32,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 2.0,
               ),
-              speed: const Duration(milliseconds: 150),
               onComplete: () {
                 if (mounted) {
                   setState(() {
                     _showSplashSubtitle = true;
                   });
-                }
-                Future.delayed(const Duration(milliseconds: 1400), () {
-                  if (mounted) {
-                    setState(() {
-                      _showSplash = false;
-                    });
-                    if (_canUseBiometrics) {
-                      _authenticateBiometrically();
+                  Future.delayed(const Duration(milliseconds: 1000), () {
+                    if (mounted) {
+                      setState(() {
+                        _showSplash = false;
+                      });
                     }
-                  }
-                });
+                  });
+                }
               },
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
+            // Smoothly faded subtitle
             AnimatedOpacity(
               opacity: _showSplashSubtitle ? 1.0 : 0.0,
               duration: const Duration(milliseconds: 600),
-              curve: Curves.easeOut,
               child: const Text(
                 'PERSONAL VAULT & LEDGER',
                 style: TextStyle(
-                  color: AppTheme.textGrey,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 3.0,
+                  color: Color(0xFF64748B),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.5,
                 ),
               ),
             ),
@@ -180,24 +198,27 @@ class _LockScreenState extends State<LockScreen> {
     }
   }
 
-  void _verifyPassword() {
-    final password = _passwordCtrl.text;
-    if (password == 'julius') {
+  Future<void> _verifyPassword() async {
+    final entered = _passwordCtrl.text;
+    final settings = await SupabaseSyncService.instance.loadProfileSettings();
+    final savedPassword = settings['lockPassword'] ?? 'julius';
+    final savedPin = settings['paymentPin'] ?? '1234';
+
+    if (entered == savedPassword || entered == savedPin) {
       setState(() {
         _errorMessage = '';
       });
       _grantAccess();
     } else {
       setState(() {
-        _errorMessage = 'Incorrect Password. Please try again.';
+        _errorMessage = 'Incorrect Password or PIN. Please try again.';
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_errorMessage),
-          backgroundColor: AppTheme.red,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      if (mounted) {
+        VaultToast.showError(
+          context,
+          _errorMessage,
+        );
+      }
     }
   }
 
@@ -242,7 +263,8 @@ class _LockScreenState extends State<LockScreen> {
 
                         // Hello Name (Typewriter Animated)
                         TypewriterText(
-                          text: 'HELLO\nJULIUS LORENZO',
+                          key: ValueKey(_greetingName),
+                          text: 'HELLO\n$_greetingName',
                           style: const TextStyle(
                             color: AppTheme.navy,
                             fontSize: 34,
@@ -308,6 +330,12 @@ class _LockScreenState extends State<LockScreen> {
                                 decoration: InputDecoration(
                                   filled: true,
                                   fillColor: AppTheme.white,
+                                  hintText: 'Enter Password or 4-digit PIN',
+                                  hintStyle: const TextStyle(
+                                    color: Color(0xFF94A3B8),
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.normal,
+                                  ),
                                   contentPadding: const EdgeInsets.symmetric(
                                       horizontal: 20, vertical: 15),
                                   suffixIcon: IconButton(

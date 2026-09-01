@@ -65,7 +65,35 @@ class NotificationService {
       // Save today's date
       await file.writeAsString(jsonEncode({'date': todayStr}));
     } catch (e) {
-      print('Error showing notification: $e');
+      // debug log
     }
   }
+
+  static Future<void> showNotification({
+    required int id,
+    required String title,
+    required String body,
+  }) async {
+    try {
+      const AndroidNotificationDetails androidNotificationDetails =
+          AndroidNotificationDetails(
+        'route_alerts',
+        'Route & Location Alerts',
+        channelDescription: 'Notifications for route arrivals and location tracking',
+        importance: Importance.max,
+        priority: Priority.high,
+        ticker: 'ticker',
+      );
+      const NotificationDetails notificationDetails =
+          NotificationDetails(android: androidNotificationDetails);
+
+      await _notificationsPlugin.show(
+        id,
+        title,
+        body,
+        notificationDetails,
+      );
+    } catch (_) {}
+  }
 }
+

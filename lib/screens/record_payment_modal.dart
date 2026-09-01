@@ -6,6 +6,7 @@ import '../models/payment.dart';
 import '../models/interest_charge.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
+import '../services/supabase_sync_service.dart';
 
 class RecordPaymentModal extends StatefulWidget {
   final Borrower borrower;
@@ -88,14 +89,95 @@ class _RecordPaymentModalState extends State<RecordPaymentModal> {
     }
   }
 
+  Future<bool> _verifySecurityPin() async {
+    final settings = await SupabaseSyncService.instance.loadProfileSettings();
+    final savedPin = settings['paymentPin'] ?? '1234';
+
+    if (!mounted) return false;
+
+    final pinCtrl = TextEditingController();
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.lock_outline, color: Color(0xFFC68A0E), size: 22),
+            SizedBox(width: 8),
+            Text(
+              'Enter Payment PIN',
+              style: TextStyle(color: AppTheme.textDark, fontWeight: FontWeight.w900, fontSize: 18),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Please enter your 4-digit security PIN to authorize and record this payment (Default: 1234):',
+              style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: pinCtrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              maxLength: 4,
+              obscureText: true,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 8),
+              decoration: InputDecoration(
+                hintText: '••••',
+                counterText: '',
+                filled: true,
+                fillColor: const Color(0xFFF6F4EE),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF64748B))),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (pinCtrl.text == savedPin) {
+                Navigator.pop(ctx, true);
+              } else {
+                VaultToast.showError(
+                  context,
+                  'Incorrect PIN! Default is "1234". Change it in Profile.',
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFC68A0E),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text('Confirm', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    return result == true;
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
     final String? actualNotes;
     if (paymentType == 'Penalty') {
       if (_selectedPenalty == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please select a penalty month to pay.'), backgroundColor: AppTheme.red),
+        VaultToast.showError(
+          context,
+          'Please select a penalty month to pay.',
         );
         return;
       }
@@ -104,6 +186,10 @@ class _RecordPaymentModalState extends State<RecordPaymentModal> {
     } else {
       actualNotes = notesCtrl.text.trim().isEmpty ? null : notesCtrl.text.trim();
     }
+
+    // Require PIN authorization
+    final authorized = await _verifySecurityPin();
+    if (!authorized) return;
 
     setState(() => saving = true);
 
@@ -117,7 +203,13 @@ class _RecordPaymentModalState extends State<RecordPaymentModal> {
     );
 
     await db.insertPayment(payment);
-    if (mounted) Navigator.pop(context);
+    if (mounted) {
+      Navigator.pop(context);
+      SupabaseSyncService.instance.syncWithFeedback(
+        context,
+        actionName: 'Payment',
+      );
+    }
   }
 
   @override
@@ -171,9 +263,9 @@ class _RecordPaymentModalState extends State<RecordPaymentModal> {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: AppTheme.red.withOpacity(0.1),
+                      color: AppTheme.red.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppTheme.red.withOpacity(0.3)),
+                      border: Border.all(color: AppTheme.red.withValues(alpha: 0.3)),
                     ),
                     child: Row(
                       children: [
@@ -350,7 +442,7 @@ class _RecordPaymentModalState extends State<RecordPaymentModal> {
                           ),
                         ),
                       );
-                    }).toList(),
+                    }),
                   const SizedBox(height: 16),
                 ],
 

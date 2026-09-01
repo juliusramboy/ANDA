@@ -2,12 +2,12 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
-import 'dart:io';
 import '../database/database_helper.dart';
 import '../models/borrower.dart';
 import '../services/pdf_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
+import '../services/supabase_sync_service.dart';
 
 class AddLoanScreen extends StatefulWidget {
   final Borrower? existing; // non-null = edit mode
@@ -252,6 +252,10 @@ class _AddLoanScreenState extends State<AddLoanScreen> {
 
     if (mounted) {
       Navigator.pop(context);
+      SupabaseSyncService.instance.syncWithFeedback(
+        context,
+        actionName: isEdit ? 'Borrower' : 'Loan',
+      );
     }
   }
 

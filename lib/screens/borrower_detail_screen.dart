@@ -10,10 +10,10 @@ import '../models/payment.dart';
 import '../models/interest_charge.dart';
 import '../services/pdf_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/common_widgets.dart';
-import 'payment_history_screen.dart';
 import 'record_payment_modal.dart';
+import 'add_loan_screen.dart';
 import '../services/auth_service.dart';
+import '../services/supabase_sync_service.dart';
 
 class BorrowerDetailScreen extends StatefulWidget {
   final int borrowerId;
@@ -28,13 +28,13 @@ class _BorrowerDetailScreenState extends State<BorrowerDetailScreen> {
   final fmt = NumberFormat('#,##0.00');
 
   Borrower? borrower;
-  List<Payment> recentPayments = [];
   List<Payment> allPayments = [];
   List<InterestCharge> interestCharges = [];
   double totalPaid = 0;
   double remainingPrincipal = 0;
   double remainingInterest = 0;
   bool loading = true;
+  bool _isCardExpanded = true;
 
   @override
   void initState() {
@@ -60,16 +60,68 @@ class _BorrowerDetailScreenState extends State<BorrowerDetailScreen> {
     final remInterest = max(0.0, remainingMaturity - remPrincipal);
     final charges = b.calculateInterestCharges(payments);
 
-    setState(() {
-      borrower = b;
-      allPayments = payments;
-      recentPayments = payments.take(2).toList();
-      interestCharges = charges;
-      totalPaid = total;
-      remainingPrincipal = remPrincipal;
-      remainingInterest = remInterest;
-      loading = false;
-    });
+    if (mounted) {
+      setState(() {
+        borrower = b;
+        allPayments = payments;
+        interestCharges = charges;
+        totalPaid = total;
+        remainingPrincipal = remPrincipal;
+        remainingInterest = remInterest;
+        loading = false;
+      });
+    }
+  }
+
+  void _showRecordPayment() async {
+    final verified = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _VerifyIdentityDialog(),
+    );
+
+    if (verified == true) {
+      if (!mounted) return;
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => RecordPaymentModal(borrower: borrower!),
+      );
+      _load();
+    }
+  }
+
+  void _showDeleteDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Borrower'),
+        content: Text(
+            'Are you sure you want to permanently delete ${borrower?.fullName}? This will also delete all associated payment records.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              await db.deleteBorrower(widget.borrowerId);
+              if (mounted) {
+                Navigator.pop(context);
+                Navigator.pop(context);
+                SupabaseSyncService.instance.syncWithFeedback(
+                  context,
+                  actionName: 'Borrower deleted',
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.red, foregroundColor: AppTheme.white),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _updateSignature() async {
@@ -119,11 +171,9 @@ class _BorrowerDetailScreenState extends State<BorrowerDetailScreen> {
                     await db.updateBorrower(updated);
                     _load();
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Signature removed successfully'),
-                          backgroundColor: AppTheme.navy,
-                        ),
+                      SupabaseSyncService.instance.syncWithFeedback(
+                        context,
+                        actionName: 'Signature removed',
                       );
                     }
                   },
@@ -150,649 +200,475 @@ class _BorrowerDetailScreenState extends State<BorrowerDetailScreen> {
       await db.updateBorrower(updated);
       _load();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Signature updated successfully!'),
-            backgroundColor: AppTheme.green,
-          ),
+        SupabaseSyncService.instance.syncWithFeedback(
+          context,
+          actionName: 'Signature',
         );
       }
     }
   }
 
-  void _showRecordPayment() async {
-    final verified = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const _VerifyIdentityDialog(),
-    );
-
-    if (verified == true) {
-      if (!mounted) return;
-      await showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => RecordPaymentModal(borrower: borrower!),
-      );
-      _load();
-    }
-  }
-
-  void _showDeleteDialog() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Delete Borrower'),
-        content: Text(
-            'Are you sure you want to delete ${borrower!.fullName}? This cannot be undone.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              await db.deleteBorrower(widget.borrowerId);
-              if (mounted) {
-                Navigator.pop(context);
-                Navigator.pop(context);
-              }
-            },
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.red, foregroundColor: AppTheme.white),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showEditPenaltyDialog(InterestCharge charge, String dateStr) {
-    final controller = TextEditingController(text: charge.totalAmount.toStringAsFixed(2));
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.cream,
-        title: const Text(
-          'Edit Penalty Amount',
-          style: TextStyle(color: AppTheme.navy, fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Anniversary: ${DateFormat('MMMM dd, yyyy').format(charge.date)}',
-                style: const TextStyle(color: AppTheme.textGrey, fontSize: 13)),
-            const SizedBox(height: 16),
-            const Text('PENALTY AMOUNT (PHP)',
-                style: TextStyle(color: AppTheme.textGrey, fontSize: 11, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 6),
-            TextField(
-              controller: controller,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: AppTheme.white,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: AppTheme.textGrey)),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final newAmount = double.tryParse(controller.text.trim());
-              if (newAmount == null || newAmount < 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please enter a valid amount.'), backgroundColor: AppTheme.red),
-                );
-                return;
-              }
-              Navigator.pop(ctx);
-              
-              final map = borrower!.getCustomPenaltyMap();
-              map[dateStr] = newAmount;
-              
-              final updated = borrower!.copyWith(
-                customPenaltyAmounts: jsonEncode(map),
-              );
-              
-              await db.updateBorrower(updated);
-              await db.updateBorrowerStatusIfNeeded(borrower!.id!);
-              await _load();
-              
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Penalty amount updated successfully!'), backgroundColor: AppTheme.green),
-              );
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.navy, foregroundColor: AppTheme.white),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     if (loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        backgroundColor: AppTheme.cream,
+        body: Center(child: CircularProgressIndicator()),
+      );
     }
     if (borrower == null) {
-      return const Scaffold(body: Center(child: Text('Not found')));
+      return Scaffold(
+        backgroundColor: AppTheme.cream,
+        appBar: AppBar(backgroundColor: AppTheme.cream),
+        body: const Center(child: Text('Borrower not found')),
+      );
     }
 
+    final b = borrower!;
+
     return Scaffold(
+      backgroundColor: AppTheme.cream,
       body: SafeArea(
-        child: Column(
-          children: [
-            // ── App bar ──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Row(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 100),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Top Bar: Back Button & Header ──
+              if (Navigator.canPop(context))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF3EFEA),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.arrow_back_ios_new,
+                        size: 16,
+                        color: AppTheme.textDark,
+                      ),
+                    ),
+                  ),
+                ),
+
+              // ── Header: Borrower Name, Balance & More Menu Button ──
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.arrow_back_ios_new, size: 20)),
-                  const SizedBox(width: 4),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(borrower!.fullName,
+                        Text(
+                          b.fullName.toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF64748B),
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            '₱${fmt.format(b.amountBorrowed)}',
                             style: const TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 17)),
-                        Row(
-                          children: [
-                            StatusDot(status: borrower!.status),
-                            const SizedBox(width: 6),
-                            Text(
-                              borrower!.status == 'active'
-                                  ? 'ACTIVE MEMBER'
-                                  : borrower!.status.toUpperCase(),
-                              style: const TextStyle(
-                                  fontSize: 11,
-                                  color: AppTheme.textGrey,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 0.5),
+                              fontSize: 34,
+                              fontWeight: FontWeight.w900,
+                              color: AppTheme.textDark,
+                              letterSpacing: -0.8,
                             ),
-                          ],
+                          ),
                         ),
                       ],
                     ),
                   ),
-                  PopupMenuButton<String>(
-                    onSelected: (v) async {
-                      if (v == 'delete') _showDeleteDialog();
-                      if (v == 'collect') {
-                        final maturityBalance = borrower!.calculateMaturityBalance(allPayments);
-                        final remainingBalance = max(0.0, maturityBalance - totalPaid);
 
-                        final confirm = await showDialog<bool>(
-                          context: context,
-                          builder: (_) => AlertDialog(
-                            title: const Text('Collect Maturity Balance'),
-                            content: Text(
-                              'Are you sure you want to collect the remaining maturity balance of '
-                              '₱${fmt.format(remainingBalance)} from ${borrower!.fullName}?\n\n'
-                              'This will record a final maturity payment for the remaining balance '
-                              'and set the status to fully paid.',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, false),
-                                child: const Text('Cancel'),
-                              ),
-                              ElevatedButton(
-                                onPressed: () => Navigator.pop(context, true),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppTheme.green,
-                                  foregroundColor: AppTheme.white,
-                                ),
-                                child: const Text('Confirm'),
-                              ),
-                            ],
+                  // ── More ⚙ Button & Popup Menu ──
+                  PopupMenuButton<String>(
+                    elevation: 12,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    color: Colors.white,
+                    surfaceTintColor: Colors.white,
+                    offset: const Offset(0, 48),
+                    onSelected: (value) async {
+                      if (value == 'record') {
+                        _showRecordPayment();
+                      } else if (value == 'export_contract') {
+                        PdfService.viewContract(context, b);
+                      } else if (value == 'export_history') {
+                        PdfService.viewPaymentHistory(context, b, allPayments);
+                      } else if (value == 'edit') {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => AddLoanScreen(existing: b),
                           ),
                         );
-
-                        if (confirm == true) {
-                          if (!context.mounted) return;
-                          final verified = await showDialog<bool>(
-                            context: context,
-                            barrierDismissible: false,
-                            builder: (_) => const _VerifyIdentityDialog(),
-                          );
-
-                          if (verified == true) {
-                            if (remainingBalance > 0) {
-                              await db.insertPayment(Payment(
-                                borrowerId: borrower!.id!,
-                                amount: remainingBalance,
-                                paymentType: 'Maturity Collection',
-                                paymentDate: DateFormat('MM/dd/yyyy').format(DateTime.now()),
-                                notes: 'Collected remaining maturity balance (Principal + Interest).',
-                                status: 'paid',
-                              ));
-                            } else {
-                              await db.updateBorrower(borrower!.copyWith(status: 'fully_paid'));
-                            }
-                            _load();
-
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Successfully collected ₱${fmt.format(remainingBalance)} from ${borrower!.fullName}.'),
-                                  backgroundColor: AppTheme.green,
-                                  behavior: SnackBarBehavior.floating,
-                                ),
-                              );
-                            }
-                          }
-                        }
+                        _load();
+                      } else if (value == 'signature') {
+                        _updateSignature();
+                      } else if (value == 'delete') {
+                        _showDeleteDialog();
                       }
                     },
-                    itemBuilder: (_) => [
-                      if (borrower!.status != 'fully_paid')
-                        const PopupMenuItem(
-                          value: 'collect',
-                          child: Text('Collect Maturity Balance'),
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'record',
+                        child: Row(
+                          children: [
+                            Icon(Icons.account_balance_wallet_outlined, color: Color(0xFFC68A0E), size: 20),
+                            SizedBox(width: 12),
+                            Text('Record Payment', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textDark)),
+                          ],
                         ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'export_contract',
+                        child: Row(
+                          children: [
+                            Icon(Icons.description_outlined, color: Color(0xFFC68A0E), size: 20),
+                            SizedBox(width: 12),
+                            Text('Export Contract', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textDark)),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'export_history',
+                        child: Row(
+                          children: [
+                            Icon(Icons.receipt_long_outlined, color: Color(0xFFC68A0E), size: 20),
+                            SizedBox(width: 12),
+                            Text('Export Payment History', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textDark)),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'edit',
+                        child: Row(
+                          children: [
+                            Icon(Icons.edit_outlined, color: Color(0xFFC68A0E), size: 20),
+                            SizedBox(width: 12),
+                            Text('Edit Agreement', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textDark)),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuDivider(height: 1),
                       const PopupMenuItem(
                         value: 'delete',
-                        child: Text('Delete', style: TextStyle(color: AppTheme.red)),
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_outline, color: AppTheme.red, size: 20),
+                            SizedBox(width: 12),
+                            Text('Delete', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.red)),
+                          ],
+                        ),
                       ),
                     ],
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.black.withValues(alpha: 0.12),
+                          width: 1,
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'More',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textDark,
+                            ),
+                          ),
+                          SizedBox(width: 6),
+                          Icon(
+                            Icons.settings_outlined,
+                            size: 16,
+                            color: AppTheme.textDark,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ],
               ),
-            ),
+              const SizedBox(height: 20),
 
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(20),
+              // ── Collapsible Principal Loan Info Card (Cream Card) ──
+              Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF7F3EB),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(
+                    color: Colors.black.withValues(alpha: 0.03),
+                  ),
+                ),
+                padding: const EdgeInsets.all(16),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // ── Hero card ──
-                    _FlippableHeroCard(
-                      borrower: borrower!,
-                      payments: allPayments,
-                      remainingPrincipal: remainingPrincipal,
-                      remainingInterest: remainingInterest,
-                      fmt: fmt,
-                    ),
-                    const SizedBox(height: 24),
-
-                    // ── Payment History ──
-                    SectionHeader(
-                      title: 'PAYMENT HISTORY',
-                      actionLabel: 'VIEW ALL',
-                      onAction: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                PaymentHistoryScreen(borrower: borrower!),
-                          ),
-                        ).then((_) => _load());
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        setState(() {
+                          _isCardExpanded = !_isCardExpanded;
+                        });
                       },
-                    ),
-                    const SizedBox(height: 12),
-
-                    if (recentPayments.isEmpty)
-                      const Center(
-                          child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 16),
-                        child: Text('No payments yet.',
-                            style: TextStyle(color: AppTheme.textGrey)),
-                      ))
-                    else
-                      ...recentPayments.map((p) => _PaymentRow(payment: p)),
-
-                    const SizedBox(height: 24),
-
-                    // ── Interest & Penalties ──
-                    const SectionHeader(title: 'INTEREST & PENALTIES'),
-                    const SizedBox(height: 12),
-
-                    if (interestCharges.isEmpty)
-                      const Center(
-                          child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 16),
-                        child: Text('No interest/penalties accrued yet.',
-                            style: TextStyle(color: AppTheme.textGrey)),
-                      ))
-                    else
-                      ...interestCharges.map((charge) {
-                        final isWaived = charge.isWaived;
-                        final isUnpaid = !isWaived && charge.unpaidAmount > 0.001;
-                        final isPartial = !isWaived && charge.paidAmount > 0.001 && isUnpaid;
-                        
-                        final statusLabel = isWaived
-                            ? 'WAIVED'
-                            : (isPartial
-                                ? '₱${fmt.format(charge.unpaidAmount)} UNPAID'
-                                : (isUnpaid ? 'UNPAID' : 'PAID'));
-                        final statusColor = isWaived
-                            ? AppTheme.textGrey
-                            : (isPartial
-                                ? AppTheme.yellow
-                                : (isUnpaid ? AppTheme.red : AppTheme.green));
-
-                        final chargeDateStr = DateFormat('MM/dd/yyyy').format(charge.date);
-                        final isPenalty = charge.label.contains("Penalty");
-
-                        Widget cardContent = Container(
-                          margin: const EdgeInsets.only(bottom: 10),
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                          decoration: BoxDecoration(
-                            color: AppTheme.white,
-                            borderRadius: BorderRadius.circular(14),
+                      child: Row(
+                        children: [
+                          // Money Icon Box
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEDE6D8),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(
+                              Icons.payments_outlined,
+                              color: Color(0xFFC68A0E),
+                              size: 22,
+                            ),
                           ),
-                          child: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: AppTheme.lightGrey,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Icon(
-                                  isWaived ? Icons.close : Icons.info_outline,
-                                  size: 18,
-                                  color: AppTheme.textGrey,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      charge.label + (isWaived ? ' (Waived)' : ''),
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 13,
-                                        decoration: isWaived ? TextDecoration.lineThrough : null,
-                                        color: isWaived ? AppTheme.textGrey : AppTheme.textDark,
-                                      ),
-                                    ),
-                                    Text(DateFormat('MMMM dd, yyyy').format(charge.date),
-                                        style: const TextStyle(
-                                            fontSize: 11, color: AppTheme.textGrey)),
-                                  ],
-                                ),
-                              ),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Text(
-                                    '₱${fmt.format(charge.totalAmount)}',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14,
-                                      decoration: isWaived ? TextDecoration.lineThrough : null,
-                                      color: isWaived ? AppTheme.textGrey : AppTheme.textDark,
-                                    ),
-                                  ),
-                                  StatusBadge(
-                                    label: statusLabel,
-                                    color: statusColor,
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        );
-
-                        if (isPenalty) {
-                          return Dismissible(
-                            key: ValueKey('charge_${charge.date.millisecondsSinceEpoch}_${charge.label}_$isWaived'),
-                            direction: DismissDirection.endToStart,
-                            background: Container(
-                              margin: const EdgeInsets.only(bottom: 10),
-                              alignment: Alignment.centerRight,
-                              padding: const EdgeInsets.only(right: 20),
-                              decoration: BoxDecoration(
-                                color: isWaived ? AppTheme.green : AppTheme.red,
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                children: [
-                                  Icon(
-                                    isWaived ? Icons.restore : Icons.block,
-                                    color: AppTheme.white,
-                                    size: 20,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    isWaived ? 'Restore Penalty' : 'Waive Penalty',
-                                    style: const TextStyle(
-                                      color: AppTheme.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            onDismissed: (direction) async {
-                              final backupWaived = borrower!.waivedPenaltyDates;
-                              final currentWaivedList = borrower!.waivedPenaltyDates
-                                  ?.split(',')
-                                  .map((s) => s.trim())
-                                  .where((s) => s.isNotEmpty)
-                                  .toList() ?? [];
-
-                              if (isWaived) {
-                                currentWaivedList.remove(chargeDateStr);
-                              } else {
-                                if (!currentWaivedList.contains(chargeDateStr)) {
-                                  currentWaivedList.add(chargeDateStr);
-                                }
-                              }
-
-                              final newWaivedStr = currentWaivedList.join(',');
-                              final updatedBorrower = borrower!.copyWith(waivedPenaltyDates: newWaivedStr);
-
-                              await db.updateBorrower(updatedBorrower);
-                              await db.updateBorrowerStatusIfNeeded(borrower!.id!);
-                              await _load();
-
-                              if (!mounted) return;
-
-                              ScaffoldMessenger.of(context).clearSnackBars();
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(isWaived
-                                      ? 'Restored penalty for ${DateFormat('MMMM dd, yyyy').format(charge.date)}.'
-                                      : 'Waived penalty for ${DateFormat('MMMM dd, yyyy').format(charge.date)}.'),
-                                  behavior: SnackBarBehavior.floating,
-                                  action: SnackBarAction(
-                                    label: 'UNDO',
-                                    textColor: AppTheme.yellow,
-                                    onPressed: () async {
-                                      final restoredBorrower = borrower!.copyWith(waivedPenaltyDates: backupWaived);
-                                      await db.updateBorrower(restoredBorrower);
-                                      await db.updateBorrowerStatusIfNeeded(restoredBorrower.id!);
-                                      _load();
-                                    },
-                                  ),
-                                ),
-                              );
-                            },
-                            child: GestureDetector(
-                              onLongPress: () => _showEditPenaltyDialog(charge, chargeDateStr),
-                              child: cardContent,
-                            ),
-                          );
-                        }
-
-                        return cardContent;
-                      }),
-
-                    const SizedBox(height: 24),
-
-                    // ── Membership Contract ──
-                    const SectionHeader(title: 'MEMBERSHIP CONTRACT'),
-                    const SizedBox(height: 12),
-
-                    Builder(builder: (context) {
-                      final hasSig = borrower!.signatureImagePath != null &&
-                          borrower!.signatureImagePath!.trim().isNotEmpty;
-                      return Container(
-                        decoration: BoxDecoration(
-                          color: AppTheme.white,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Material(
-                          color: Colors.transparent,
-                          child: ListTile(
-                            onTap: () =>
-                                PdfService.viewContract(context, borrower!),
-                            onLongPress: _updateSignature,
-                            leading: const Icon(Icons.description_outlined,
-                                color: AppTheme.navy),
-                            title: Text(
-                              '${borrower!.fullName.replaceAll(' ', '_')}_Contract.pdf',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 13),
-                            ),
-                            subtitle: Text(
-                              hasSig
-                                  ? 'Signed ${borrower!.issueDate} (Hold to edit signature)'
-                                  : 'No signature attached (Hold to add signature)',
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  color: hasSig
-                                      ? AppTheme.textGrey
-                                      : AppTheme.orange),
-                            ),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                IconButton(
-                                  icon: const Icon(Icons.edit_outlined,
-                                      size: 20, color: AppTheme.navy),
-                                  tooltip: 'Edit Signature',
-                                  onPressed: _updateSignature,
+                                const Text(
+                                  'Principal',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFFC68A0E),
+                                  ),
                                 ),
-                                GestureDetector(
-                                  onTap: () => PdfService.downloadContract(
-                                      context, borrower!),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: const BoxDecoration(
-                                      color: AppTheme.yellow,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(Icons.download,
-                                        size: 16, color: AppTheme.navy),
+                                const SizedBox(height: 2),
+                                Text(
+                                  b.status == 'active' ? 'Active Borrower' : b.status.toUpperCase(),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFF64748B),
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                        ),
-                      );
-                    }),
-
-                    const SizedBox(height: 28),
-
-                    // ── Actions ──
-                    YellowButton(
-                      label: 'Download all payment history',
-                      icon: Icons.download,
-                      onTap: () => PdfService.downloadPaymentHistory(
-                          context, borrower!, allPayments),
-                    ),
-                    const SizedBox(height: 12),
-                    if (borrower!.status != 'fully_paid') ...[
-                      OutlineButton2(
-                        label: 'Record Payment',
-                        icon: Icons.edit_outlined,
-                        onTap: _showRecordPayment,
+                          Text(
+                            '₱${fmt.format(remainingPrincipal)}',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFFC68A0E),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Icon(
+                            _isCardExpanded
+                                ? Icons.keyboard_arrow_up
+                                : Icons.keyboard_arrow_down,
+                            color: const Color(0xFFC68A0E),
+                            size: 20,
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 16),
-                    ],
+                    ),
+
+                    // Expandable Details
+                    AnimatedCrossFade(
+                      duration: const Duration(milliseconds: 250),
+                      crossFadeState: _isCardExpanded
+                          ? CrossFadeState.showSecond
+                          : CrossFadeState.showFirst,
+                      firstChild: const SizedBox.shrink(),
+                      secondChild: Column(
+                        children: [
+                          const SizedBox(height: 14),
+                          const Divider(height: 1, color: Colors.black12),
+                          const SizedBox(height: 14),
+                          _buildDetailRow('Billing Cycle', b.billingCycle),
+                          const SizedBox(height: 10),
+                          _buildDetailRow('Next Payment Due', b.repaymentDate),
+                          const SizedBox(height: 10),
+                          _buildDetailRow('Issue Date', b.issueDate),
+                          const SizedBox(height: 10),
+                          _buildDetailRow(
+                            'Interest Rate',
+                            '${b.interestRate}% ${b.isOneTimeInterest ? 'One-time' : b.billingCycle.toUpperCase()}',
+                          ),
+                          if (b.agreedSetupAmount != null) ...[
+                            const SizedBox(height: 10),
+                            _buildDetailRow('Agreed Setup Amount', '₱${fmt.format(b.agreedSetupAmount!)}'),
+                          ],
+                        ],
+                      ),
+                    ),
                   ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+              const Divider(height: 1, color: Colors.black12),
+              const SizedBox(height: 20),
+
+              // ── HISTORY Header ──
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'HISTORY',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF475569),
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                  Text(
+                    'Total P${fmt.format(totalPaid)}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1E1E24),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // ── Payments History List ──
+              if (allPayments.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: Text(
+                      'No payments recorded yet.',
+                      style: TextStyle(color: AppTheme.textGrey, fontSize: 14),
+                    ),
+                  ),
+                )
+              else
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: allPayments.length,
+                  separatorBuilder: (_, __) => const Divider(
+                    height: 28,
+                    color: Colors.black12,
+                  ),
+                  itemBuilder: (context, index) {
+                    final p = allPayments[index];
+                    return _buildPaymentHistoryRow(p);
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 13,
+            color: Color(0xFF64748B),
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: AppTheme.textDark,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPaymentHistoryRow(Payment p) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              p.paymentType,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFF0F172A),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              p.paymentDate,
+              style: const TextStyle(
+                fontSize: 12,
+                color: Color(0xFF64748B),
+              ),
+            ),
+          ],
+        ),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              '₱${fmt.format(p.amount)}',
+              style: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+                color: Color(0xFFC68A0E),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                p.status.toUpperCase(),
+                style: const TextStyle(
+                  color: Color(0xFFB45309),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.5,
                 ),
               ),
             ),
           ],
         ),
-      ),
+      ],
     );
   }
 }
 
-class _PaymentRow extends StatelessWidget {
-  final Payment payment;
-  const _PaymentRow({required this.payment});
-
-  @override
-  Widget build(BuildContext context) {
-    final fmt = NumberFormat('#,##0.00');
-    final isCredit = payment.status == 'credited';
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppTheme.white,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppTheme.lightGrey,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(Icons.receipt_outlined,
-                size: 18, color: AppTheme.textGrey),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(payment.paymentType,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 13)),
-                Text(payment.paymentDate,
-                    style: const TextStyle(
-                        fontSize: 11, color: AppTheme.textGrey)),
-              ],
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                '${isCredit ? '-' : ''}₱${fmt.format(payment.amount)}',
-                style:
-                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-              ),
-              StatusBadge(
-                label: payment.status.toUpperCase(),
-                color: isCredit ? AppTheme.blue : AppTheme.green,
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
+// ── Verify Identity Modal Dialog ──
 class _VerifyIdentityDialog extends StatefulWidget {
   const _VerifyIdentityDialog();
 
@@ -863,7 +739,6 @@ class _VerifyIdentityDialogState extends State<_VerifyIdentityDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -900,8 +775,6 @@ class _VerifyIdentityDialogState extends State<_VerifyIdentityDialog> {
               ],
             ),
             const SizedBox(height: 20),
-
-            // Password Field
             const Text(
               'Enter Password',
               style: TextStyle(
@@ -929,10 +802,6 @@ class _VerifyIdentityDialogState extends State<_VerifyIdentityDialog> {
                   borderRadius: BorderRadius.circular(12),
                   borderSide: const BorderSide(color: AppTheme.lightGrey),
                 ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: AppTheme.lightGrey),
-                ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                   borderSide: const BorderSide(color: AppTheme.navy, width: 1.5),
@@ -950,8 +819,6 @@ class _VerifyIdentityDialogState extends State<_VerifyIdentityDialog> {
               ),
             ),
             const SizedBox(height: 24),
-
-            // Action Buttons
             Row(
               children: [
                 Expanded(
@@ -965,10 +832,7 @@ class _VerifyIdentityDialogState extends State<_VerifyIdentityDialog> {
                         borderRadius: BorderRadius.circular(24),
                       ),
                     ),
-                    child: const Text(
-                      'Cancel',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
+                    child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -984,305 +848,13 @@ class _VerifyIdentityDialogState extends State<_VerifyIdentityDialog> {
                         borderRadius: BorderRadius.circular(24),
                       ),
                     ),
-                    child: const Text(
-                      'Confirm',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
+                    child: const Text('Confirm', style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
                 ),
               ],
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _FlippableHeroCard extends StatefulWidget {
-  final Borrower borrower;
-  final List<Payment> payments;
-  final double remainingPrincipal;
-  final double remainingInterest;
-  final NumberFormat fmt;
-
-  const _FlippableHeroCard({
-    required this.borrower,
-    required this.payments,
-    required this.remainingPrincipal,
-    required this.remainingInterest,
-    required this.fmt,
-  });
-
-  @override
-  State<_FlippableHeroCard> createState() => _FlippableHeroCardState();
-}
-
-class _FlippableHeroCardState extends State<_FlippableHeroCard>
-    with TickerProviderStateMixin {
-  late AnimationController _flipController;
-  late Animation<double> _flipAnimation;
-
-  late AnimationController _shakeController;
-  late Animation<double> _shakeAnimation;
-  Timer? _shakeTimer;
-
-  bool _isFront = true;
-
-  @override
-  void initState() {
-    super.initState();
-
-    // Flip Animation
-    _flipController = AnimationController(
-      duration: const Duration(milliseconds: 500),
-      vsync: this,
-    );
-    _flipAnimation = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(parent: _flipController, curve: Curves.easeInOut),
-    );
-
-    // Shake Hint Animation
-    _shakeController = AnimationController(
-      duration: const Duration(milliseconds: 1000),
-      vsync: this,
-    );
-    _shakeAnimation = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(parent: _shakeController, curve: Curves.easeInOut),
-    );
-
-    // Run the shake animation once the card mounts to hint at interactive flipping
-    Future.delayed(const Duration(milliseconds: 600), () {
-      if (mounted) {
-        _shakeController.forward(from: 0);
-      }
-    });
-
-    // Run wiggle animation periodically every 6 seconds if showing the front
-    _shakeTimer = Timer.periodic(const Duration(seconds: 6), (timer) {
-      if (mounted && _isFront) {
-        _shakeController.forward(from: 0);
-      }
-    });
-  }
-
-  void _toggleFlip() {
-    if (_isFront) {
-      _flipController.forward();
-    } else {
-      _flipController.reverse();
-    }
-    setState(() {
-      _isFront = !_isFront;
-    });
-  }
-
-  @override
-  void dispose() {
-    _flipController.dispose();
-    _shakeController.dispose();
-    _shakeTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final interestAmount = widget.borrower.calculateTotalInterestAndPenalties(widget.payments);
-    final maturityBalance = widget.borrower.calculateMaturityBalance(widget.payments);
-
-    return GestureDetector(
-      onDoubleTap: _toggleFlip,
-      child: AnimatedBuilder(
-        animation: Listenable.merge([_flipAnimation, _shakeAnimation]),
-        builder: (context, child) {
-          double flipAngle = _flipAnimation.value * pi;
-
-          double shakeAngle = 0.0;
-          if (_shakeController.isAnimating) {
-            shakeAngle = sin(_shakeAnimation.value * 3 * pi) * 0.08;
-          }
-
-          double totalAngle = flipAngle + shakeAngle;
-          final isBack = (flipAngle % (2 * pi)) > (pi / 2) &&
-              (flipAngle % (2 * pi)) < (3 * pi / 2);
-
-          return Transform(
-            transform: Matrix4.identity()
-              ..setEntry(3, 2, 0.001) // perspective
-              ..rotateY(totalAngle),
-            alignment: Alignment.center,
-            child: isBack
-                ? Transform(
-                    transform: Matrix4.identity()..rotateY(pi),
-                    alignment: Alignment.center,
-                    child: _buildBackCard(interestAmount, maturityBalance),
-                  )
-                : _buildFrontCard(),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildFrontCard() {
-    final showInterest = widget.remainingPrincipal <= 0;
-    return NavyCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                showInterest ? 'REMAINING INTEREST' : 'REMAINING PRINCIPAL',
-                style: const TextStyle(
-                  color: Colors.white60,
-                  fontSize: 11,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  showInterest ? Icons.stars : Icons.account_balance_wallet_outlined,
-                  color: showInterest ? AppTheme.yellow : AppTheme.white,
-                  size: 18,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '₱${widget.fmt.format(showInterest ? widget.remainingInterest : widget.remainingPrincipal)}',
-            style: TextStyle(
-              color: showInterest ? AppTheme.yellow : AppTheme.white,
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('NEXT PAYMENT DUE',
-                        style: TextStyle(
-                            color: Colors.white60,
-                            fontSize: 10,
-                            letterSpacing: 0.5)),
-                    Text(widget.borrower.repaymentDate,
-                        style: const TextStyle(
-                            color: AppTheme.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14)),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('BILLING CYCLE',
-                        style: TextStyle(
-                            color: Colors.white60,
-                            fontSize: 10,
-                            letterSpacing: 0.5)),
-                    Text(widget.borrower.billingCycle,
-                        style: const TextStyle(
-                            color: AppTheme.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBackCard(double interestAmount, double maturityBalance) {
-    return NavyCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('MATURITY BALANCE',
-                  style: TextStyle(
-                      color: Colors.white60,
-                      fontSize: 11,
-                      letterSpacing: 0.5)),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                    Icons.stars,
-                    color: AppTheme.yellow,
-                    size: 18),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '₱${widget.fmt.format(maturityBalance)}',
-            style: const TextStyle(
-              color: AppTheme.yellow,
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('MATURITY DATE',
-                        style: TextStyle(
-                            color: Colors.white60,
-                            fontSize: 10,
-                            letterSpacing: 0.5)),
-                    Text(widget.borrower.repaymentDate,
-                        style: const TextStyle(
-                            color: AppTheme.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14)),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Amount Intrest',
-                        style: TextStyle(
-                            color: Colors.white60,
-                            fontSize: 10,
-                            letterSpacing: 0.5)),
-                    Text('₱${widget.fmt.format(interestAmount)}',
-                        style: const TextStyle(
-                            color: AppTheme.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14)),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
       ),
     );
   }

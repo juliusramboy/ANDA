@@ -61,24 +61,28 @@ class Borrower {
       };
 
   factory Borrower.fromMap(Map<String, dynamic> map) => Borrower(
-        id: map['id'],
-        loanReference: map['loanReference'],
-        fullName: map['fullName'],
-        amountBorrowed: (map['amountBorrowed'] as num).toDouble(),
-        interestRate: (map['interestRate'] as num).toDouble(),
-        repaymentDate: map['repaymentDate'],
-        issueDate: map['issueDate'],
-        signatureImagePath: map['signatureImagePath'],
-        status: map['status'] ?? 'active',
-        billingCycle: map['billingCycle'] ?? 'Monthly',
+        id: map['id'] is int ? map['id'] : (int.tryParse(map['id']?.toString() ?? '')),
+        loanReference: map['loanReference']?.toString() ?? '',
+        fullName: map['fullName']?.toString() ?? '',
+        amountBorrowed: map['amountBorrowed'] != null
+            ? (double.tryParse(map['amountBorrowed'].toString()) ?? 0.0)
+            : 0.0,
+        interestRate: map['interestRate'] != null
+            ? (double.tryParse(map['interestRate'].toString()) ?? 0.0)
+            : 0.0,
+        repaymentDate: map['repaymentDate']?.toString() ?? '',
+        issueDate: map['issueDate']?.toString() ?? '',
+        signatureImagePath: map['signatureImagePath']?.toString(),
+        status: map['status']?.toString() ?? 'active',
+        billingCycle: map['billingCycle']?.toString() ?? 'Monthly',
         agreedSetupAmount: map['agreedSetupAmount'] != null
-            ? (map['agreedSetupAmount'] as num).toDouble()
+            ? (double.tryParse(map['agreedSetupAmount'].toString()))
             : null,
-        dismissedWiggleDate: map['dismissedWiggleDate'],
-        isOneTimeInterest: (map['isOneTimeInterest'] ?? 0) == 1,
-        waivedPenaltyDates: map['waivedPenaltyDates'],
-        customPenaltyAmounts: map['customPenaltyAmounts'],
-        updatedAt: map['updatedAt'],
+        dismissedWiggleDate: map['dismissedWiggleDate']?.toString(),
+        isOneTimeInterest: map['isOneTimeInterest'] == 1 || map['isOneTimeInterest'] == true || map['isOneTimeInterest'] == '1',
+        waivedPenaltyDates: map['waivedPenaltyDates']?.toString(),
+        customPenaltyAmounts: map['customPenaltyAmounts']?.toString(),
+        updatedAt: map['updatedAt']?.toString() ?? '',
       );
 
   Borrower copyWith({

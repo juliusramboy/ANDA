@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import '../main.dart';
+import '../services/supabase_sync_service.dart';
 import '../theme/app_theme.dart';
 import 'lock_screen.dart';
 
@@ -69,10 +71,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     } catch (_) {}
 
     if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const LockScreen()),
-      );
+      final settings = await SupabaseSyncService.instance.loadProfileSettings();
+      final bool isLockEnabled = settings['isLockEnabled'] ?? false;
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => isLockEnabled ? const LockScreen() : const MainShell()),
+        );
+      }
     }
   }
 
